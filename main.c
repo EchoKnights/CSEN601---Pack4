@@ -3,11 +3,32 @@
 //but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
 
 #define MEMORY_SIZE 1026
+#define NOP_INSTR 0xA000  //nop instruction encoding, which just does nothing and acts as a filler.
+#define HALT_INSTR 0xB000 //halt instruction encoding.
 
 //variables
+int fetched = 0;
+int executed = 0;
+int cycles   = 0;     
+int program_length = 0;
+
+int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
 
 
 //arrays
+typedef struct {
+    int raw; //the 16-bit word grabbed from memory.
+    int opcode;
+    int r1;
+    int r2;
+    int r1data;
+    int r2data;
+} Decodedinstruction_t;
+
+Decodedinstruction_t id_reg = {.raw = NOP_INSTR}; //decoded word in the decoding stage
+Decodedinstruction_t ex_reg = {.raw = NOP_INSTR}; //decoded word in the execution stage
+
+
 int REGISTER_FILE[64]; //missing the special registers btw.
 
 typedef struct {
@@ -49,22 +70,18 @@ int fetch_instruction() {
     }
 }
 
-void decode_instruction(int instruction) {
-    int opcode = 0;
-    int r1 = 0;
-    int r2 = 0;
-    int r1data = 0;
-    int r2data = 0;
-
-    opcode = ((unsigned) instruction >> 12);
-    r1 = ((instruction >> 6) & 0b000000111111);
-    r2 = (instruction & 0b0000000000111111);
-
-    r1data = REGISTER_FILE[r1];
-    r2data = REGISTER_FILE[r2];
-
-    printf("Decoded instruction: %i %i %i\n", opcode, r1, r2);
+Decodedinstruction_t decode_instruction(int instruction) {
+    {   
+        Decodedinstruction_t i;
+        i.opcode = ((unsigned) instruction >> 12);
+        i.r1 = ((instruction >> 6) & 0b000000111111);
+        i.r2 = (instruction & 0b0000000000111111);
+    
+        i.r1data = REGISTER_FILE[i.r1];
+        i.r2data = REGISTER_FILE[i.r2];
+    }
 }
+
 
 int sign_extend(int imm) {
     int sign_bit = (imm >> 5);
@@ -105,8 +122,6 @@ void set_sign_flag(int Z, int N) {
     SREG.S = Z ^ N;
 }
 
-
-//function is still missing the special flags
 void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
     int imm = sign_extend(r2);
     int carry = 0;
@@ -223,7 +238,36 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 
 
 int main(){
+    //finds the program length by counting the number of instructions until the halt instruction.
+    while (program_length < MEMORY_SIZE && MAIN_MEMORY[program_length] != HALT_INSTR)
+        program_length++;
+    program_length++; //to include the halt instruction in the program length.
 
-    decode_instruction(fetch_instruction());
+    while (executed < program_length){
+        cycles++;
+        ex_reg = id_reg;
+
+        //shift the instruction inside the fetch slot to the decode slot.
+        id_reg = decode_instruction(if_reg);
+
+        //start the fetch again.
+        if (fetched < program_length)
+            if_reg = MAIN_MEMORY[fetched++];
+        else
+            if_reg = NOP_INSTR;
+
+        //execute
+        if (ex_reg.raw != NOP_INSTR) {
+            execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
+            executed++;
+        }
+
+
+        //asked chatgpt to make the print statements more readable, but i don't know if it did a good job or not.
+        printf("Cycle %2d  |  IF 0x%04X  |  ID op %d  |  EX op %d\n",cycles, if_reg, id_reg.opcode, ex_reg.opcode);
+    }
+
+    printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1));
+    
     return 0;
 }
