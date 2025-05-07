@@ -98,7 +98,7 @@ void loadProgram(const char *fname) {
   
       //gets mnemonics
       char *m = strtok(buf," \t\r\n");
-      const ISA *p = findISATAB(m);
+      const ISA *p = get_instr_by_mnemonic(m);
   
       int r1=0, r2=0;
       if(p->opcode!=12 && p->opcode!=13){ 
@@ -150,12 +150,12 @@ Decodedinstruction_t decode_instruction(int instruction) {
 
 
 int sign_extend(int imm) {
-    int sign_bit = (imm >> 5);
+    int sign_bit = (imm >> 5) & 1;
     if (sign_bit == 1) {
         return imm | 0b11000000;
     }
     else{
-        return imm | 0b00000000;
+        return imm & 0b00111111;
     }
 }
 
@@ -269,13 +269,13 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 7: //jump register
-        PC = r1data || r2data;
+        PC = r1data | r2data;
         break;
 
         case 8: //shift left circular
         int left_part  = (r1data << DATA_MEMORY[imm]);
         int right_part = (r1data >> (8 - DATA_MEMORY[imm]));
-        REGISTER_FILE[r1data] = (left_part | right_part);
+        REGISTER_FILE[r1] = (left_part | right_part);
 
         set_negative_flag(r1data);
         set_zero_flag(r1data);
@@ -284,7 +284,7 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         case 9: //shift right circular
         int right_part = (r1data >> imm) & 0xFF;
         int left_part  = (r1data << (8 - imm)) & 0xFF;
-        REGISTER_FILE[r1data] = (left_part | right_part);
+        REGISTER_FILE[r1] = (left_part | right_part);
 
         set_negative_flag(r1data);
         set_zero_flag(r1data);
@@ -302,12 +302,15 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 }
 
 int main(){
-    memset(REGISTER_FILE, 0, sizeof(REGISTER_FILE)); //initialize REGISTER_FILE to 0, so all registers are 0 by default.
-
     //finds the program length by counting the number of instructions until the halt instruction.
     while (program_length < INSTRUCTION_MEMORY_SIZE && INSTRUCTION_MEMORY[program_length] != HALT_INSTR)
         program_length++;
-    program_length++; //to include the halt instruction in the program length.
+    while (program_length < INSTRUCTION_MEMORY_SIZE) {
+        if (INSTRUCTION_MEMORY[program_length] == HALT_INSTR) {
+            break;
+        }
+        program_length++;
+    }
 
     while (executed < program_length){
         cycles++;
@@ -330,7 +333,7 @@ int main(){
 
 
         //asked chatgpt to make the print statements more readable, but i don't know if it did a good job or not.
-        printf("Cycle %2d  |  IF 0x%04X  |  ID op %d  |  EX op %d\n",cycles, if_reg, id_reg.opcode, ex_reg.opcode);
+        printf("Cycle %2d  |  IF 0x%04X  |  ID op %2d  |  EX op %2d\n", cycles, if_reg, id_reg.opcode, ex_reg.opcode);
     }
 
     printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1));
