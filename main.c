@@ -2,11 +2,14 @@
 //#include <stdint.h> This gives access to the uint16_t type, which is a 16-bit unsigned integer type that i wanted to use for the instructions to ensure that the instructions are always 16 bits long.
 //but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
 
-#define MEMORY_SIZE 1026
+#define INSTRUCTION_MEMORY_SIZE 1024
+#define DATA_MEMORY_SIZE 2048
 #define NOP_INSTR 0xA000  //nop instruction encoding, which just does nothing and acts as a filler.
 #define HALT_INSTR 0xB000 //halt instruction encoding.
 
 //variables
+FILE *fptr; 
+
 int fetched = 0;
 int executed = 0;
 int cycles   = 0;     
@@ -16,6 +19,26 @@ int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
 
 
 //arrays
+typedef struct { const char *mn; int opcode; int is_immediate; } ISA; //the ISA table - format: (mnemonic (the actual assembly instruction), opcode, whether r2 is immediate or not(1 = yes, 0 = no)).
+
+static const ISA ISATAB[] = {
+    {"ADD",  0, 0}, 
+    {"SUB",  1, 0}, 
+    {"MUL", 2, 0},
+    {"LDI",  3, 1}, 
+    {"BEQZ", 4, 1},
+    {"AND",  5, 0}, 
+    {"OR",  6, 0},
+    {"JR",   7, 0},
+    {"SLC",  8, 1}, 
+    {"SRC", 9, 1},
+    {"LB",  10, 1}, 
+    {"SB", 11, 1},
+    {"NOP", 12, 0}, 
+    {"HALT",13,0}
+};
+#define ISA_LEN (sizeof ISATAB/ sizeof ISATAB[0]) 
+
 typedef struct {
     int raw; //the 16-bit word grabbed from memory.
     int opcode;
@@ -44,27 +67,68 @@ SREG_t SREG = {0};
 
 int PC = 0; //program counter
 
-int MAIN_MEMORY[MEMORY_SIZE] = {
-    //I used chatgpt to generate test instructions for debugging, bas please remember to remove them because i don't want to risk a cheating case.
-    0x412A,
-    0x4254,
-    0x0301,
-    0x0302,
-    0x5305,
-    0x7300,
-    0x6400,
-    0x4902,
-    0x4501,
-    0x0614,
-    0xA000,
-    0xB000
-};
+int INSTRUCTION_MEMORY[INSTRUCTION_MEMORY_SIZE] = {0};
+
+int DATA_MEMORY[DATA_MEMORY_SIZE]; //this is the data memory, which is initialized to 0 by default.
 
 
 //functions
+const int *get_instr_by_mnemonic(const char *mn) {
+    for (int i = 0; i < ISA_LEN; i++)
+        if (strcmp(ISATAB[i].mn, mn) == 0)
+            return &ISATAB[i];
+    return NULL;
+}
+
+const int *get_instr_by_opcode(int opcode) {
+    for (int i = 0; i < ISA_LEN; i++)
+        if (ISATAB[i].opcode == opcode)
+            return &ISATAB[i];
+    return NULL;
+}
+
+void loadProgram(const char *fname) {
+    FILE *f = fopen(fname,"r");
+
+    char buf[128];
+    while(fgets(buf,sizeof buf,f) && program_length < INSTRUCTION_MEMORY_SIZE) {
+      //strip any comments so it doesn't brick the parser
+      char *c = strpbrk(buf,";#");
+      if(c) *c = '\0';
+  
+      //gets mnemonics
+      char *m = strtok(buf," \t\r\n");
+      const ISA *p = findISATAB(m);
+  
+      int r1=0, r2=0;
+      if(p->opcode!=12 && p->opcode!=13){ 
+
+        //R1
+        char *t = strtok(NULL," ,\t\n");  
+        r1 = atoi(t+1);
+
+        //R2 
+        t = strtok(NULL," ,\t\n");
+        if (p->is_immediate){
+            r2 = (atoi(t)); 
+        }
+        else{ 
+            r2 = (atoi(t+1));
+        }
+      }
+  
+      int word = (p->opcode<<12) | (r1<<6) | r2;
+      INSTRUCTION_MEMORY[program_length++] = word;
+      if(p->opcode==13) break; //stop at HALT
+    }
+    fclose(f);
+  }
+
+
+
 int fetch_instruction() {
-    if (PC < MEMORY_SIZE) {
-        int instruction = MAIN_MEMORY[PC];
+    if (PC < INSTRUCTION_MEMORY_SIZE) {
+        int instruction = INSTRUCTION_MEMORY[PC];
         PC++;
         return instruction;
     }
@@ -72,20 +136,22 @@ int fetch_instruction() {
 
 Decodedinstruction_t decode_instruction(int instruction) {
     {   
-        Decodedinstruction_t i;
+        Decodedinstruction_t i = {.raw = instruction};
         i.opcode = ((unsigned) instruction >> 12);
         i.r1 = ((instruction >> 6) & 0b000000111111);
         i.r2 = (instruction & 0b0000000000111111);
     
         i.r1data = REGISTER_FILE[i.r1];
         i.r2data = REGISTER_FILE[i.r2];
+
+        return i;
     }
 }
 
 
 int sign_extend(int imm) {
     int sign_bit = (imm >> 5);
-    if (sign_bit = 1) {
+    if (sign_bit == 1) {
         return imm | 0b11000000;
     }
     else{
@@ -128,7 +194,6 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
     int r1_sign_bit = (r1data >> 7);
     int r2_sign_bit = (r2data >> 7);
     int result_sign_bit = 0;
-
 
     switch (opcode) { //the switch case should be updated to reflect the actual opcodes.
         case 0: //add
@@ -185,7 +250,7 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 
         case 4: //branch if equal zero
         if(r1data == 0) {
-            PC = PC + 1 + imm;
+            PC += sign_extend(r2);
         }
         break;
 
@@ -208,8 +273,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 8: //shift left circular
-        int left_part  = (r1data << imm);
-        int right_part = (r1data >> (8 - imm));
+        int left_part  = (r1data << DATA_MEMORY[imm]);
+        int right_part = (r1data >> (8 - DATA_MEMORY[imm]));
         REGISTER_FILE[r1data] = (left_part | right_part);
 
         set_negative_flag(r1data);
@@ -226,20 +291,21 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 10: //load byte
-        r1data = MAIN_MEMORY[imm];
+        r1data = DATA_MEMORY[imm];
         REGISTER_FILE[r1] = r1data;
         break;
 
         case 11: //store byte
-        MAIN_MEMORY[imm] = r1data;
+        DATA_MEMORY[imm] = r1data;
         break;
     }
 }
 
-
 int main(){
+    memset(REGISTER_FILE, 0, sizeof(REGISTER_FILE)); //initialize REGISTER_FILE to 0, so all registers are 0 by default.
+
     //finds the program length by counting the number of instructions until the halt instruction.
-    while (program_length < MEMORY_SIZE && MAIN_MEMORY[program_length] != HALT_INSTR)
+    while (program_length < INSTRUCTION_MEMORY_SIZE && INSTRUCTION_MEMORY[program_length] != HALT_INSTR)
         program_length++;
     program_length++; //to include the halt instruction in the program length.
 
@@ -252,7 +318,7 @@ int main(){
 
         //start the fetch again.
         if (fetched < program_length)
-            if_reg = MAIN_MEMORY[fetched++];
+            if_reg = INSTRUCTION_MEMORY[fetched++];
         else
             if_reg = NOP_INSTR;
 
