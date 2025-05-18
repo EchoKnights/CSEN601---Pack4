@@ -427,7 +427,7 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 11: //store byte
-        DATA_MEMORY[imm] = r1data;
+        DATA_MEMORY[imm] = REGISTER_FILE[r1];
         break;
 
         case 12: //nop
@@ -447,15 +447,15 @@ int main(){
 
     print_instructions(cycles,if_reg, id_reg, ex_reg); //prints the instructions in the instruction memory in assembly format
 
+    //print the pipeline state
+    print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
+
     //ensures that the program doesn't run forever.
     while (executed < program_length + pipeline_depth - 1){
         if (cycles >= max_cycles) {            
             printf("maximum cycles reached.\n");
             break;   
         }
-
-        //print the pipeline state
-        print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
 
         cycles++;
         ex_reg = id_reg;
@@ -473,6 +473,10 @@ int main(){
         if (ex_reg.raw != NOP_INSTR) {
             execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
         }
+
+        //print the pipeline state
+        print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
+
         executed++;
     }
 
