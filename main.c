@@ -6,17 +6,18 @@
 
 #define INSTRUCTION_MEMORY_SIZE 1024
 #define DATA_MEMORY_SIZE 2048
-#define NOP_INSTR 0xA000  //nop instruction encoding, which just does nothing and acts as a filler.
-#define HALT_INSTR 0xB000 //halt instruction encoding.
+#define NOP_INSTR 0b1100000000000000  //nop instruction encoding, which just does nothing and acts as a filler.
+#define HALT_INSTR 0b1101000000000000 //halt instruction encoding.
 
 //variables
 FILE *fptr; 
 
 int fetched = 0;
 int executed = 0;
-int cycles   = 0;     
+int cycles = 0; //number of cycles that have passed.
+int max_cycles = 100; //if i don't include this, the program runs forever     
 int program_length = 0;
-
+int pipeline_depth = 3;
 int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
 
 
@@ -89,44 +90,69 @@ const ISA *get_instr_by_opcode(int opcode) {
     return NULL;
 }
 
-void loadProgram(const char *fname) {
+void loadProgram(const char *fname, int start_addr) {
     FILE *f = fopen(fname,"r");
+    if (!f) {
+        printf("Failed to open %s\n", fname);
+        exit(1);
+    }
 
     char buf[128];
-    while(fgets(buf,sizeof buf,f) && program_length < INSTRUCTION_MEMORY_SIZE) {
-      //strip any comments so it doesn't brick the parser
-      char *c = strpbrk(buf,";#");
-      if(c) *c = '\0';
-  
-      //gets mnemonics
-      char *m = strtok(buf," \t\r\n");
-      const ISA *p = get_instr_by_mnemonic(m);
-  
-      int r1=0, r2=0;
-      if(p->opcode!=12 && p->opcode!=13){ 
+    int instr_loaded = 0;
+    int was_empty = (program_length == 0);
 
-        //R1
-        char *t = strtok(NULL," ,\t\n");  
-        r1 = atoi(t+1);
+    while(fgets(buf,sizeof buf,f) && (start_addr + instr_loaded) < INSTRUCTION_MEMORY_SIZE) {
+        //strip any comments so it doesn't brick the parser
+        char *c = strpbrk(buf,";#");
+        if(c) *c = '\0';
 
-        //R2 
-        t = strtok(NULL," ,\t\n");
-        if (p->is_immediate){
-            r2 = (atoi(t)); 
+        //skip empty lines
+        char *m = strtok(buf," \t\r\n");
+        if (!m) continue;
+
+        const ISA *p = get_instr_by_mnemonic(m);
+        if (!p) {
+            printf("Unknown instruction: %s\n", m);
+            continue;
         }
-        else{ 
-            r2 = (atoi(t+1));
+
+        int r1=0, r2=0;
+        if(p->opcode!=12 && p->opcode!=13){ 
+            //R1
+            char *t = strtok(NULL," ,\t\n");  
+            if (!t) continue;
+            r1 = atoi(t+1);
+
+            //R2 
+            t = strtok(NULL," ,\t\n");
+            if (!t) continue;
+            if (p->is_immediate){
+                r2 = (atoi(t)); 
+            }
+            else{ 
+                r2 = (atoi(t+1));
+            }
         }
-      }
-  
-      int word = (p->opcode<<12) | (r1<<6) | r2;
-      INSTRUCTION_MEMORY[program_length++] = word;
-      if(p->opcode==13) break; //stop at HALT
+
+        int word = (p->opcode<<12) | (r1<<6) | r2;
+        INSTRUCTION_MEMORY[start_addr + instr_loaded] = word;
+        instr_loaded++;
+        if(p->opcode==13) break; //stop at HALT
     }
     fclose(f);
-  }
 
+    //updates program_length
+    if (start_addr + instr_loaded > program_length)
+        program_length = start_addr + instr_loaded;
 
+    //preps the pipeline if this is the first program loaded
+    if (was_empty && instr_loaded > 0) {
+        if_reg = INSTRUCTION_MEMORY[0];
+        fetched = 1;
+        id_reg.raw = NOP_INSTR;
+        ex_reg.raw = NOP_INSTR;
+    }
+}
 
 int fetch_instruction() {
     if (PC < INSTRUCTION_MEMORY_SIZE) {
@@ -306,20 +332,25 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 }
 
 int main(){
-    loadProgram("progrtestam.txt"); //load the program from the file.
+    loadProgram("test.txt", 0); //load the program from the file.
+    id_reg = decode_instruction(NOP_INSTR);
+    ex_reg = decode_instruction(NOP_INSTR);
 
-
-    //finds the program length by counting the number of instructions until the halt instruction.
-    while (program_length < INSTRUCTION_MEMORY_SIZE && INSTRUCTION_MEMORY[program_length] != HALT_INSTR)
-        program_length++;
-    while (program_length < INSTRUCTION_MEMORY_SIZE) {
-        if (INSTRUCTION_MEMORY[program_length] == HALT_INSTR) {
-            break;
+    //ensures that the program doesn't run forever.
+    while (executed < program_length + pipeline_depth - 1){
+        if (cycles >= max_cycles) {            
+            printf("maximum cycles reached.\n"); 
+            break;   
         }
-        program_length++;
-    }
 
-    while (executed < program_length){
+        // Print pipeline state BEFORE updating
+        printf("Cycle %2d  |  IF ", cycles + 1);
+        for (int i = 15; i >= 0; i--) {
+            printf("%d", (if_reg >> i) & 1);
+            if (i % 4 == 0 && i != 0) printf(" ");
+        }
+        printf("  |  ID op %2d  |  EX op %2d\n", id_reg.opcode, ex_reg.opcode);
+
         cycles++;
         ex_reg = id_reg;
 
@@ -335,12 +366,8 @@ int main(){
         //execute
         if (ex_reg.raw != NOP_INSTR) {
             execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
-            executed++;
         }
-
-
-        //asked chatgpt to make the print statements more readable, but i don't know if it did a good job or not.
-        printf("Cycle %2d  |  IF 0x%04X  |  ID op %2d  |  EX op %2d\n", cycles, if_reg, id_reg.opcode, ex_reg.opcode);
+        executed++;
     }
 
     printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1));
