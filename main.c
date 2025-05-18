@@ -14,7 +14,8 @@ FILE *fptr;
 
 int fetched = 0;
 int executed = 0;
-int cycles   = 0;     
+int cycles   = 0;
+int max_cycles = 10; //if i don't include this, the program runs forever     
 int program_length = 0;
 
 int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
@@ -306,20 +307,14 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 }
 
 int main(){
-    loadProgram("progrtestam.txt"); //load the program from the file.
-
-
-    //finds the program length by counting the number of instructions until the halt instruction.
-    while (program_length < INSTRUCTION_MEMORY_SIZE && INSTRUCTION_MEMORY[program_length] != HALT_INSTR)
-        program_length++;
-    while (program_length < INSTRUCTION_MEMORY_SIZE) {
-        if (INSTRUCTION_MEMORY[program_length] == HALT_INSTR) {
-            break;
-        }
-        program_length++;
-    }
+    loadProgram("test.txt"); //load the program from the file.
 
     while (executed < program_length){
+        if (cycles >= max_cycles) {            
+            printf("maximum cycles reached.\n"); 
+            break;   
+        }
+
         cycles++;
         ex_reg = id_reg;
 
@@ -338,8 +333,6 @@ int main(){
             executed++;
         }
 
-
-        //asked chatgpt to make the print statements more readable, but i don't know if it did a good job or not.
         printf("Cycle %2d  |  IF 0x%04X  |  ID op %2d  |  EX op %2d\n", cycles, if_reg, id_reg.opcode, ex_reg.opcode);
     }
 
