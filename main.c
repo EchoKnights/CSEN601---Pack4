@@ -15,7 +15,7 @@ FILE *fptr;
 int fetched = 0;
 int executed = 0;
 int cycles   = 0;
-int max_cycles = 10; //if i don't include this, the program runs forever     
+int max_cycles = 100; //if i don't include this, the program runs forever     
 int program_length = 0;
 
 int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
@@ -92,42 +92,51 @@ const ISA *get_instr_by_opcode(int opcode) {
 
 void loadProgram(const char *fname) {
     FILE *f = fopen(fname,"r");
+    if (!f) {
+        printf("Failed to open %s\n", fname);
+        exit(1);
+    }
 
     char buf[128];
     while(fgets(buf,sizeof buf,f) && program_length < INSTRUCTION_MEMORY_SIZE) {
-      //strip any comments so it doesn't brick the parser
-      char *c = strpbrk(buf,";#");
-      if(c) *c = '\0';
-  
-      //gets mnemonics
-      char *m = strtok(buf," \t\r\n");
-      const ISA *p = get_instr_by_mnemonic(m);
-  
-      int r1=0, r2=0;
-      if(p->opcode!=12 && p->opcode!=13){ 
+        //strip any comments so it doesn't brick the parser
+        char *c = strpbrk(buf,";#");
+        if(c) *c = '\0';
 
-        //R1
-        char *t = strtok(NULL," ,\t\n");  
-        r1 = atoi(t+1);
+        //skip empty lines
+        char *m = strtok(buf," \t\r\n");
+        if (!m) continue;
 
-        //R2 
-        t = strtok(NULL," ,\t\n");
-        if (p->is_immediate){
-            r2 = (atoi(t)); 
+        const ISA *p = get_instr_by_mnemonic(m);
+        if (!p) {
+            printf("Unknown instruction: %s\n", m);
+            continue;
         }
-        else{ 
-            r2 = (atoi(t+1));
+
+        int r1=0, r2=0;
+        if(p->opcode!=12 && p->opcode!=13){ 
+            //R1
+            char *t = strtok(NULL," ,\t\n");  
+            if (!t) continue;
+            r1 = atoi(t+1);
+
+            //R2 
+            t = strtok(NULL," ,\t\n");
+            if (!t) continue;
+            if (p->is_immediate){
+                r2 = (atoi(t)); 
+            }
+            else{ 
+                r2 = (atoi(t+1));
+            }
         }
-      }
-  
-      int word = (p->opcode<<12) | (r1<<6) | r2;
-      INSTRUCTION_MEMORY[program_length++] = word;
-      if(p->opcode==13) break; //stop at HALT
+
+        int word = (p->opcode<<12) | (r1<<6) | r2;
+        INSTRUCTION_MEMORY[program_length++] = word;
+        if(p->opcode==13) break; //stop at HALT
     }
     fclose(f);
-  }
-
-
+}
 
 int fetch_instruction() {
     if (PC < INSTRUCTION_MEMORY_SIZE) {
@@ -309,6 +318,7 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 int main(){
     loadProgram("test.txt"); //load the program from the file.
 
+    //ensures that the program doesn't run forever.
     while (executed < program_length){
         if (cycles >= max_cycles) {            
             printf("maximum cycles reached.\n"); 
