@@ -1,0 +1,10 @@
+LDI R1, 5      ; Load immediate value 5 into R1
+LDI R2, 10     ; Load immediate value 10 into R2
+ADD R3, R1     ; R3 = R3 + R1 (should be 5)
+ADD R3, R2     ; R3 = R3 + R2 (should be 15)
+SUB R4, R1     ; R4 = R4 - R1 (should be -5)
+AND R5, R2     ; R5 = R5 & R2 (should be 10)
+OR  R6, R1     ; R6 = R6 | R1 (should be 5)
+BEQZ R4, 2     ; Branch if R4 == 0 (should not branch)
+NOP            ; No operation
+HALT           ; Stop execution

@@ -1,0 +1,25 @@
+; Test immediate values (positive and negative, 6-bit signed: -32 to 31)
+LDI R1, #5
+LDI R2, #-3
+
+; Test BEQZ not taken (R1 != 0)
+BEQZ R1, #2
+LDI R3, #31    ; Max positive immediate (was #99, now #31)
+
+; Test BEQZ taken (R2 == 0 after adding 3)
+ADD R2, R1     ; R2 = 2
+SUB R2, R1     ; R2 = -3
+ADD R2, R1     ; R2 = 2
+SUB R2, R2     ; R2 = 0
+BEQZ R2, #2
+LDI R4, #-32   ; Min negative immediate (was #123, now #-32, will be skipped)
+LDI R4, #10    ; Should execute
+
+; Test JR (unconditional jump)
+LDI R5, #14    ; Target address for jump (within range)
+JR R5, R0      ; Jump to instruction 12
+
+LDI R6, #20    ; Should be skipped (within range)
+LDI R7, #25    ; Should execute (within range)
+
+HALT

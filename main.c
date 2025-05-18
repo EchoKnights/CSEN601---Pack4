@@ -90,6 +90,28 @@ const ISA *get_instr_by_opcode(int opcode) {
     return NULL;
 }
 
+int sign_extend(int imm) {
+    if (imm & 0b00100000)
+        return imm | ~0b00111111;
+    else
+        return imm & 0b00111111;
+}
+
+//this function is meant to parse immediate values, including negative and anything with a '#' prefix
+int parse_immediate(const char *s) {
+    //skips the '#' prefix if it exists
+    if (s[0] == '#') s++;
+    // Handle negative values
+    int val = atoi(s);
+    // Mask to 6 bits (for 6-bit immediate field, two's complement)
+    if (val < 0) {
+        val = (val + 64) & 0x3F; // 6-bit two's complement
+    } else {
+        val = val & 0x3F;
+    }
+    return val;
+}
+
 void loadProgram(const char *fname, int start_addr) {
     FILE *f = fopen(fname,"r");
     if (!f) {
@@ -103,7 +125,7 @@ void loadProgram(const char *fname, int start_addr) {
 
     while(fgets(buf,sizeof buf,f) && (start_addr + instr_loaded) < INSTRUCTION_MEMORY_SIZE) {
         //strip any comments so it doesn't brick the parser
-        char *c = strpbrk(buf,";#");
+        char *c = strpbrk(buf,";");
         if(c) *c = '\0';
 
         //skip empty lines
@@ -128,7 +150,7 @@ void loadProgram(const char *fname, int start_addr) {
             t = strtok(NULL," ,\t\n");
             if (!t) continue;
             if (p->is_immediate){
-                r2 = (atoi(t)); 
+                r2 = parse_immediate(t); // use helper for immediate values
             }
             else{ 
                 r2 = (atoi(t+1));
@@ -189,7 +211,7 @@ void print_instructions(){
             int r2 = word & 0x3F;
             const ISA *isa = get_instr_by_opcode(opcode);
             if (isa) {
-                if (opcode == 12 || opcode == 13) { // NOP or HALT
+                if (opcode == 12 || opcode == 13) { //NOP or HALT
                     printf("Instruction %d: %s\n", i, isa->mn);
                 } else if (isa->is_immediate) {
                     printf("Instruction %d: %s R%d, #%d\n", i, isa->mn, r1, (r2 & 0x20) ? (r2 | ~0x3F) : r2);
@@ -201,14 +223,16 @@ void print_instructions(){
             }
         }
     }
-    printf("\n");
+    printf("\n"); 
 }
+
+//responsible for printing everything in the pipeline, like the current instruction in each stage, as well as register and memory updates.
 void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, Decodedinstruction_t ex_reg) {
     static int prev_register_file[64] = {0};
     static int prev_data_memory[DATA_MEMORY_SIZE] = {0};
     static int first_call = 1;
 
-    //prints the pipeline state BEFORE updating (this fixed so many bugs for me)
+    //prints the current fetched instruction in binary
     printf("Cycle %2d  |  IF ", cycle + 1);
     for (int i = 15; i >= 0; i--) {
         printf("%d", (if_reg >> i) & 1);
@@ -222,7 +246,6 @@ void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, De
     printf("  |  IF: %-5s", if_isa ? if_isa->mn : "UNK");
     printf("  |  ID: %-5s", id_isa ? id_isa->mn : "UNK");
     printf("  |  EX: %-5s", ex_isa ? ex_isa->mn : "UNK");
-    printf("  |  ID op %2d  |  EX op %2d", id_reg.opcode, ex_reg.opcode);
 
     //on first call, just copy the initial state for comparison
     //this is to ensure that the first call doesn't print garbage values (which it did, repeatedly)
@@ -263,16 +286,6 @@ void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, De
     memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
 
     printf("\n");
-}
-
-int sign_extend(int imm) {
-    int sign_bit = (imm >> 5) & 1;
-    if (sign_bit == 1) {
-        return imm | 0b11000000;
-    }
-    else{
-        return imm & 0b00111111;
-    }
 }
 
 void set_carry_flag(int carry) {

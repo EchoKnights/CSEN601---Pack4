@@ -1,0 +1,13 @@
+LDI R1, 8        ; R1 = 8
+LDI R2, 3        ; R2 = 3
+MUL R3, R2       ; R3 = R3 * R2 (should be 0 * 3 = 0)
+ADD R3, R1       ; R3 = R3 + R1 (should be 0 + 8 = 8)
+SUB R1, R2       ; R1 = R1 - R2 (should be 8 - 3 = 5)
+SLC R1, 2        ; Shift R1 left circular by DATA_MEMORY[2] (DATA_MEMORY[2] is 0, so no shift)
+LDI R4, 15       ; R4 = 15
+SB R4, 5         ; Store R4 (15) into DATA_MEMORY[5]
+LB R5, 5         ; Load DATA_MEMORY[5] into R5 (should be 15)
+SRC R5, 1        ; Shift R5 right circular by 1 (should be 15 rotated right by 1)
+JR R1, R2        ; Jump to address R1 | R2 (should set PC to 5 | 3 = 7)
+NOP              ; No operation
+HALT             ; Stop execution
