@@ -17,7 +17,7 @@ int executed = 0;
 int cycles = 0; //number of cycles that have passed.
 int max_cycles = 100; //if i don't include this, the program runs forever     
 int program_length = 0;
-int pipeline_depth = 3;
+int pipeline_depth = 3; //aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
 int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
 
 
@@ -97,9 +97,9 @@ void loadProgram(const char *fname, int start_addr) {
         exit(1);
     }
 
-    char buf[128];
+    char buf[128]; //modified version of the template code from w3schools, but it's efficient and it works
     int instr_loaded = 0;
-    int was_empty = (program_length == 0);
+    int was_empty = (program_length == 0); //flag that checks if the memory was empty when loading the program
 
     while(fgets(buf,sizeof buf,f) && (start_addr + instr_loaded) < INSTRUCTION_MEMORY_SIZE) {
         //strip any comments so it doesn't brick the parser
@@ -110,6 +110,7 @@ void loadProgram(const char *fname, int start_addr) {
         char *m = strtok(buf," \t\r\n");
         if (!m) continue;
 
+        //pulls the instruction by it's mnemonic and checks if it's valid
         const ISA *p = get_instr_by_mnemonic(m);
         if (!p) {
             printf("Unknown instruction: %s\n", m);
@@ -134,10 +135,11 @@ void loadProgram(const char *fname, int start_addr) {
             }
         }
 
+        //folds the assembly instruction into a 16-bit word to be added into memory
         int word = (p->opcode<<12) | (r1<<6) | r2;
-        INSTRUCTION_MEMORY[start_addr + instr_loaded] = word;
-        instr_loaded++;
-        if(p->opcode==13) break; //stop at HALT
+        INSTRUCTION_MEMORY[start_addr + instr_loaded] = word; //adds the word into memory
+        instr_loaded++; //increments to keep track of how many instructions were loaded
+        if(p->opcode==13) break; //ensures the loading process stops at HALT
     }
     fclose(f);
 
@@ -339,11 +341,11 @@ int main(){
     //ensures that the program doesn't run forever.
     while (executed < program_length + pipeline_depth - 1){
         if (cycles >= max_cycles) {            
-            printf("maximum cycles reached.\n"); 
+            printf("maximum cycles reached.\n");
             break;   
         }
 
-        // Print pipeline state BEFORE updating
+        //prints the pipeline state BEFORE updating (this fixed so many bugs for me)
         printf("Cycle %2d  |  IF ", cycles + 1);
         for (int i = 15; i >= 0; i--) {
             printf("%d", (if_reg >> i) & 1);
@@ -370,7 +372,7 @@ int main(){
         executed++;
     }
 
-    printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1));
+    printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1)); //prints the total cycles taken to execute according to the formula on the milestone description
     
     return 0;
 }
