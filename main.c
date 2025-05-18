@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 //#include <stdint.h> This gives access to the uint16_t type, which is a 16-bit unsigned integer type that i wanted to use for the instructions to ensure that the instructions are always 16 bits long.
 //but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
 
@@ -73,14 +75,14 @@ int DATA_MEMORY[DATA_MEMORY_SIZE]; //this is the data memory, which is initializ
 
 
 //functions
-const int *get_instr_by_mnemonic(const char *mn) {
+const ISA *get_instr_by_mnemonic(const char *mn) {
     for (int i = 0; i < ISA_LEN; i++)
         if (strcmp(ISATAB[i].mn, mn) == 0)
             return &ISATAB[i];
     return NULL;
 }
 
-const int *get_instr_by_opcode(int opcode) {
+const ISA *get_instr_by_opcode(int opcode) {
     for (int i = 0; i < ISA_LEN; i++)
         if (ISATAB[i].opcode == opcode)
             return &ISATAB[i];
@@ -194,6 +196,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
     int r1_sign_bit = (r1data >> 7);
     int r2_sign_bit = (r2data >> 7);
     int result_sign_bit = 0;
+    int left_part = 0;
+    int right_part = 0;
 
     switch (opcode) { //the switch case should be updated to reflect the actual opcodes.
         case 0: //add
@@ -273,8 +277,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 8: //shift left circular
-        int left_part  = (r1data << DATA_MEMORY[imm]);
-        int right_part = (r1data >> (8 - DATA_MEMORY[imm]));
+        left_part  = (r1data << DATA_MEMORY[imm]);
+        right_part = (r1data >> (8 - DATA_MEMORY[imm]));
         REGISTER_FILE[r1] = (left_part | right_part);
 
         set_negative_flag(r1data);
@@ -282,8 +286,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 9: //shift right circular
-        int right_part = (r1data >> imm) & 0xFF;
-        int left_part  = (r1data << (8 - imm)) & 0xFF;
+        right_part = (r1data >> imm) & 0xFF;
+        left_part  = (r1data << (8 - imm)) & 0xFF;
         REGISTER_FILE[r1] = (left_part | right_part);
 
         set_negative_flag(r1data);
@@ -302,6 +306,9 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 }
 
 int main(){
+    loadProgram("progrtestam.txt"); //load the program from the file.
+
+
     //finds the program length by counting the number of instructions until the halt instruction.
     while (program_length < INSTRUCTION_MEMORY_SIZE && INSTRUCTION_MEMORY[program_length] != HALT_INSTR)
         program_length++;
