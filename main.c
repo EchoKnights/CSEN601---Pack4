@@ -330,6 +330,14 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         case 11: //store byte
         DATA_MEMORY[imm] = r1data;
         break;
+
+        case 12: //nop
+        //do nothing
+        break;
+
+        case 13: //halt
+        printf("HALT instruction executed.\n");
+
     }
 }
 
@@ -337,6 +345,12 @@ int main(){
     loadProgram("test.txt", 0); //load the program from the file.
     id_reg = decode_instruction(NOP_INSTR);
     ex_reg = decode_instruction(NOP_INSTR);
+
+    for (int i = 0; i < INSTRUCTION_MEMORY_SIZE; i++) {
+        if (INSTRUCTION_MEMORY[i] != 0) {
+            printf("Instruction %d: %04X\n", i, INSTRUCTION_MEMORY[i]);
+        }
+    }
 
     //ensures that the program doesn't run forever.
     while (executed < program_length + pipeline_depth - 1){
