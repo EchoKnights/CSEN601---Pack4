@@ -178,6 +178,92 @@ Decodedinstruction_t decode_instruction(int instruction) {
     }
 }
 
+//this function prints all instructions in the instruction in assembly format
+void print_instructions(){
+    printf("Instruction Memory:\n");
+    for (int i = 0; i < INSTRUCTION_MEMORY_SIZE; i++) {
+        int word = INSTRUCTION_MEMORY[i];
+        if (word != 0) {
+            int opcode = (word >> 12) & 0xF;
+            int r1 = (word >> 6) & 0x3F;
+            int r2 = word & 0x3F;
+            const ISA *isa = get_instr_by_opcode(opcode);
+            if (isa) {
+                if (opcode == 12 || opcode == 13) { // NOP or HALT
+                    printf("Instruction %d: %s\n", i, isa->mn);
+                } else if (isa->is_immediate) {
+                    printf("Instruction %d: %s R%d, #%d\n", i, isa->mn, r1, (r2 & 0x20) ? (r2 | ~0x3F) : r2);
+                } else {
+                    printf("Instruction %d: %s R%d, R%d\n", i, isa->mn, r1, r2);
+                }
+            } else {
+                printf("Instruction %d: UNKNOWN (0x%04X)\n", i, word);
+            }
+        }
+    }
+    printf("\n");
+}
+void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, Decodedinstruction_t ex_reg) {
+    static int prev_register_file[64] = {0};
+    static int prev_data_memory[DATA_MEMORY_SIZE] = {0};
+    static int first_call = 1;
+
+    //prints the pipeline state BEFORE updating (this fixed so many bugs for me)
+    printf("Cycle %2d  |  IF ", cycle + 1);
+    for (int i = 15; i >= 0; i--) {
+        printf("%d", (if_reg >> i) & 1);
+        if (i % 4 == 0 && i != 0) printf(" ");
+    }
+    //prints the current instruction per stage
+    const ISA *if_isa = get_instr_by_opcode((if_reg >> 12) & 0xF);
+    const ISA *id_isa = get_instr_by_opcode(id_reg.opcode);
+    const ISA *ex_isa = get_instr_by_opcode(ex_reg.opcode);
+
+    printf("  |  IF: %-5s", if_isa ? if_isa->mn : "UNK");
+    printf("  |  ID: %-5s", id_isa ? id_isa->mn : "UNK");
+    printf("  |  EX: %-5s", ex_isa ? ex_isa->mn : "UNK");
+    printf("  |  ID op %2d  |  EX op %2d", id_reg.opcode, ex_reg.opcode);
+
+    //on first call, just copy the initial state for comparison
+    //this is to ensure that the first call doesn't print garbage values (which it did, repeatedly)
+    if (first_call) {
+        memcpy(prev_register_file, REGISTER_FILE, sizeof(REGISTER_FILE));
+        memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
+        first_call = 0;
+        printf("\n");
+        return;
+    }
+
+    //cheks for register updates
+    int reg_updated = 0;
+    for (int i = 0; i < 64; i++) {
+        if (REGISTER_FILE[i] != prev_register_file[i]) {
+            if (!reg_updated) {
+                printf("  |  Register Updates:");
+                reg_updated = 1;
+            }
+            printf(" R%d: %d -> %d;", i, prev_register_file[i], REGISTER_FILE[i]);
+        }
+    }
+
+    //checks for memory updates
+    int mem_updated = 0;
+    for (int i = 0; i < DATA_MEMORY_SIZE; i++) {
+        if (DATA_MEMORY[i] != prev_data_memory[i]) {
+            if (!mem_updated) {
+                printf("  |  Memory Updates:");
+                mem_updated = 1;
+            }
+            printf(" M[%d]: %d -> %d;", i, prev_data_memory[i], DATA_MEMORY[i]);
+        }
+    }
+
+    //updates the previous state so it can be compared to the current state
+    memcpy(prev_register_file, REGISTER_FILE, sizeof(REGISTER_FILE));
+    memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
+
+    printf("\n");
+}
 
 int sign_extend(int imm) {
     int sign_bit = (imm >> 5) & 1;
@@ -342,15 +428,11 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
 }
 
 int main(){
-    loadProgram("test.txt", 0); //load the program from the file.
+    loadProgram("test3.txt", 0); //load the program from the file.
     id_reg = decode_instruction(NOP_INSTR);
     ex_reg = decode_instruction(NOP_INSTR);
 
-    for (int i = 0; i < INSTRUCTION_MEMORY_SIZE; i++) {
-        if (INSTRUCTION_MEMORY[i] != 0) {
-            printf("Instruction %d: %04X\n", i, INSTRUCTION_MEMORY[i]);
-        }
-    }
+    print_instructions(cycles,if_reg, id_reg, ex_reg); //prints the instructions in the instruction memory in assembly format
 
     //ensures that the program doesn't run forever.
     while (executed < program_length + pipeline_depth - 1){
@@ -359,13 +441,8 @@ int main(){
             break;   
         }
 
-        //prints the pipeline state BEFORE updating (this fixed so many bugs for me)
-        printf("Cycle %2d  |  IF ", cycles + 1);
-        for (int i = 15; i >= 0; i--) {
-            printf("%d", (if_reg >> i) & 1);
-            if (i % 4 == 0 && i != 0) printf(" ");
-        }
-        printf("  |  ID op %2d  |  EX op %2d\n", id_reg.opcode, ex_reg.opcode);
+        //print the pipeline state
+        print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
 
         cycles++;
         ex_reg = id_reg;
