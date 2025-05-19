@@ -19,6 +19,7 @@ int max_cycles = 100; // if i don't include this, the program runs forever
 int program_length = 0;
 int pipeline_depth = 3; // aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
 int if_reg = NOP_INSTR; // raw 16-bit word in the fetch stage
+int if_reg_addr = -1;   // Address of the instruction in if_reg
 
 // arrays
 typedef struct
@@ -47,7 +48,8 @@ static const ISA ISATAB[] = {
 
 typedef struct
 {
-  int raw; // the 16-bit word grabbed from memory.
+  int raw;     // the 16-bit word grabbed from memory.
+  int address; // Address where this instruction was fetched from
   int opcode;
   int r1;
   int r2;
@@ -55,8 +57,8 @@ typedef struct
   int r2data;
 } Decodedinstruction_t;
 
-Decodedinstruction_t id_reg = {.raw = NOP_INSTR}; // decoded word in the decoding stage
-Decodedinstruction_t ex_reg = {.raw = NOP_INSTR}; // decoded word in the execution stage
+Decodedinstruction_t id_reg = {.raw = NOP_INSTR, .address = -1}; // decoded word in the decoding stage
+Decodedinstruction_t ex_reg = {.raw = NOP_INSTR, .address = -1}; // decoded word in the execution stage
 
 int REGISTER_FILE[64]; // missing the special registers btw.
 
@@ -212,10 +214,10 @@ int fetch_instruction()
   }
 }
 
-Decodedinstruction_t decode_instruction(int instruction)
+Decodedinstruction_t decode_instruction(int instruction, int instruction_address)
 {
   {
-    Decodedinstruction_t i = {.raw = instruction};
+    Decodedinstruction_t i = {.raw = instruction, .address = instruction_address};
     i.opcode = ((unsigned)instruction >> 12);
     i.r1 = ((instruction >> 6) & 0b000000111111);
     i.r2 = (instruction & 0b0000000000111111);
@@ -230,7 +232,8 @@ Decodedinstruction_t decode_instruction(int instruction)
 void flush_pipeline(int new_pc)
 {
   if_reg = NOP_INSTR;
-  id_reg = decode_instruction(NOP_INSTR);
+  if_reg_addr = -1; // Mark address of NOP in IF as invalid/special
+  id_reg = decode_instruction(NOP_INSTR, -1);
   fetched = new_pc;
   PC = new_pc;
 }
@@ -385,9 +388,15 @@ void set_sign_flag(int Z, int N)
   SREG.S = Z ^ N;
 }
 
-void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
+void execute_instruction(Decodedinstruction_t instr)
 {
-  int imm = sign_extend(r2);
+  int opcode = instr.opcode;
+  int r1 = instr.r1;
+  int r2 = instr.r2; // Raw 6-bit field: R2 index for R-types, immediate for I-types
+  int r1data = instr.r1data;
+  int r2data = instr.r2data; // Content of REG[R2] (for R-types)
+
+  int imm_val_signed = sign_extend(instr.r2); // Sign-extended immediate value from r2 field
   int carry = 0;
   int r1_sign_bit = (r1data >> 7);
   int r2_sign_bit = (r2data >> 7);
@@ -398,8 +407,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
   switch (opcode)
   {       // the switch case should be updated to reflect the actual opcodes.
   case 0: // add
-    r1data = r1data + r2data;
-    REGISTER_FILE[r1] = r1data;
+    r1data = instr.r1data + instr.r2data;
+    REGISTER_FILE[instr.r1] = r1data;
 
     // set the carry flag
     carry = r1data >> 8;
@@ -422,8 +431,8 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
     break;
 
   case 1: // sub
-    r1data = r1data - r2data;
-    REGISTER_FILE[r1] = r1data;
+    r1data = instr.r1data - instr.r2data;
+    REGISTER_FILE[instr.r1] = r1data;
 
     set_negative_flag(r1data);
     set_zero_flag(r1data);
@@ -442,71 +451,117 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
     break;
 
   case 2: // mul
-    r1data = r1data * r2data;
-    REGISTER_FILE[r1] = r1data;
+    r1data = instr.r1data * instr.r2data;
+    REGISTER_FILE[instr.r1] = r1data;
     set_negative_flag(r1data);
     set_zero_flag(r1data);
     break;
 
-  case 3: // load immediate
-    r1data = imm;
-    REGISTER_FILE[r1] = r1data;
+  case 3:                                     // load immediate (LDI R1, Imm)
+    REGISTER_FILE[instr.r1] = imm_val_signed; // Immediate is from instr.r2 (6-bit field), sign-extended
     break;
 
-  case 4: // branch if equal zero
-    if (r1data == 0)
+  case 4: // branch if equal zero (BEQZ R1, Imm)
+    // R1 content is in instr.r1data
+    // Immediate for offset is in instr.r2 (6-bit field)
+    if (instr.r1data == 0)
     {
-      int target = PC + sign_extend(r2);
+      // Target PC = (Address of BEQZ instruction) + 1 + sign_extended_IMM
+      int pc_of_beqz_plus_1 = instr.address + 1;
+      int target = pc_of_beqz_plus_1 + imm_val_signed;
       flush_pipeline(target);
-      printf("Branch taken to address %d\n", target);
+      printf("Branch taken to address %d (from instruction at %d)\n", target, instr.address);
     }
     break;
 
-  case 5: // and
-    r1data = r1data & r2data;
-    REGISTER_FILE[r1] = r1data;
+  case 5: // and (AND R1, R2)
+    r1data = instr.r1data & instr.r2data;
+    REGISTER_FILE[instr.r1] = r1data;
     set_negative_flag(r1data);
     set_zero_flag(r1data);
     break;
 
-  case 6: // or
-    r1data = r1data | r2data;
-    REGISTER_FILE[r1] = r1data;
+  case 6: // or (OR R1, R2)
+    r1data = instr.r1data | instr.r2data;
+    REGISTER_FILE[instr.r1] = r1data;
     set_negative_flag(r1data);
     set_zero_flag(r1data);
     break;
 
-  case 7: // jump register
-    r1data = REGISTER_FILE[r1];
-    flush_pipeline(r1data);
-    printf("Jumping to address %d\n", r1data);
+  case 7: // jump register (JR R1)
+    // Target address is content of R[R1] (instr.r1data)
+    flush_pipeline(instr.r1data);
+    printf("Jumping to address %d (from R%d which holds %d, instruction at %d)\n", instr.r1data, instr.r1, instr.r1data, instr.address);
     break;
 
-  case 8: // shift left circular
-    left_part = (r1data << DATA_MEMORY[imm]);
-    right_part = (r1data >> (8 - DATA_MEMORY[imm]));
-    REGISTER_FILE[r1] = (left_part | right_part);
+  case 8: // shift left circular (SLC R1, Imm)
+  {
+    int shift_amount = instr.r2; // Immediate shift amount from instr.r2 (0-63)
+    int effective_shift = shift_amount % 8;
 
-    set_negative_flag(r1data);
-    set_zero_flag(r1data);
+    if (instr.r1data == 0)
+    {
+      REGISTER_FILE[instr.r1] = 0;
+    }
+    else if (effective_shift == 0)
+    {
+      REGISTER_FILE[instr.r1] = instr.r1data;
+    }
+    else
+    {
+      REGISTER_FILE[instr.r1] = ((instr.r1data << effective_shift) | (instr.r1data >> (8 - effective_shift))) & 0xFF;
+    }
+    set_negative_flag(REGISTER_FILE[instr.r1]);
+    set_zero_flag(REGISTER_FILE[instr.r1]);
+  }
+  break;
+
+  case 9: // shift right circular (SRC R1, Imm)
+  {
+    int shift_amount = instr.r2; // Immediate shift amount from instr.r2 (0-63)
+    int effective_shift = shift_amount % 8;
+
+    if (instr.r1data == 0)
+    {
+      REGISTER_FILE[instr.r1] = 0;
+    }
+    else if (effective_shift == 0)
+    {
+      REGISTER_FILE[instr.r1] = instr.r1data;
+    }
+    else
+    {
+      REGISTER_FILE[instr.r1] = ((instr.r1data >> effective_shift) | (instr.r1data << (8 - effective_shift))) & 0xFF;
+    }
+    set_negative_flag(REGISTER_FILE[instr.r1]);
+    set_zero_flag(REGISTER_FILE[instr.r1]);
+  }
+  break;
+
+  case 10: // load byte (LB R1, Imm)
+    // Immediate from instr.r2 (sign-extended) is the memory address
+    if (imm_val_signed >= 0 && imm_val_signed < DATA_MEMORY_SIZE)
+    {
+      REGISTER_FILE[instr.r1] = DATA_MEMORY[imm_val_signed];
+    }
+    else
+    {
+      printf("LB: Address %d out of bounds.\n", imm_val_signed);
+      REGISTER_FILE[instr.r1] = 0; // Default behavior for out-of-bounds read
+    }
     break;
 
-  case 9: // shift right circular
-    right_part = (r1data >> imm) & 0xFF;
-    left_part = (r1data << (8 - imm)) & 0xFF;
-    REGISTER_FILE[r1] = (left_part | right_part);
-
-    set_negative_flag(r1data);
-    set_zero_flag(r1data);
-    break;
-
-  case 10: // load byte
-    r1data = DATA_MEMORY[imm];
-    REGISTER_FILE[r1] = r1data;
-    break;
-
-  case 11: // store byte
-    DATA_MEMORY[imm] = REGISTER_FILE[r1];
+  case 11: // store byte (SB R1, Imm)
+    // R[R1] (instr.r1data) is stored at Mem[imm_val_signed]
+    // Immediate from instr.r2 (sign-extended) is the memory address
+    if (imm_val_signed >= 0 && imm_val_signed < DATA_MEMORY_SIZE)
+    {
+      DATA_MEMORY[imm_val_signed] = instr.r1data;
+    }
+    else
+    {
+      printf("SB: Address %d out of bounds.\n", imm_val_signed);
+    }
     break;
 
   case 12: // nop
@@ -520,13 +575,39 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
 
 int main()
 {
+  // Initialize default NOPs for pipeline registers that carry Decodedinstruction_t
+  id_reg = decode_instruction(NOP_INSTR, -1);
+  ex_reg = decode_instruction(NOP_INSTR, -1);
+  if_reg_addr = -1; // Address of the instruction in if_reg (if_reg itself is just an int)
+
   loadProgram("test4.txt", 0); // load the program from the file.
-  id_reg = decode_instruction(NOP_INSTR);
-  ex_reg = decode_instruction(NOP_INSTR);
+                               // This sets global: program_length
+                               // and if program loaded: if_reg=MEM[0], fetched=1, id_reg.raw=NOP, ex_reg.raw=NOP
 
-  print_instructions(cycles, if_reg, id_reg, ex_reg); // prints the instructions in the instruction memory in assembly format
+  // Sync/initialize pipeline state after loadProgram
+  cycles = 0;
+  PC = 0; // PC generally starts at 0 or is set by jumps
 
-  // print the pipeline state
+  if (program_length > 0)
+  {
+    // loadProgram already primed if_reg with MEM[0] and fetched to 1
+    // So, if_reg_addr should correspond to the address of MEM[0], which is 0.
+    if_reg_addr = 0;
+    // id_reg and ex_reg were set to NOP by loadProgram (their .raw field)
+    // and our earlier decode_instruction(NOP_INSTR, -1) call set them up fully.
+  }
+  else
+  {
+    // No program loaded, ensure all pipeline stages are NOP and consistent
+    if_reg = NOP_INSTR;
+    if_reg_addr = -1;
+    fetched = 0;
+    // id_reg and ex_reg are already full NOPs
+  }
+
+  print_instructions(); // prints the instructions in the instruction memory in assembly format
+
+  // print the initial pipeline state
   print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
 
   // ensures that the program doesn't run forever.
@@ -541,19 +622,25 @@ int main()
     cycles++;
     ex_reg = id_reg;
 
-    // shift the instruction inside the fetch slot to the decode slot.
-    id_reg = decode_instruction(if_reg);
+    // Pipeline stage progression
+    id_reg = decode_instruction(if_reg, if_reg_addr); // IF -> ID; pass raw instruction and its address for decoding
 
-    // start the fetch again.
+    // Fetch next instruction for IF stage
+    if_reg_addr = fetched; // Store address for the upcoming IF instruction (current 'fetched' value)
     if (fetched < program_length)
-      if_reg = INSTRUCTION_MEMORY[fetched++];
+    {
+      if_reg = INSTRUCTION_MEMORY[fetched++]; // Fetch from memory and advance 'fetched' pointer
+    }
     else
+    {
       if_reg = NOP_INSTR;
+      if_reg_addr = -1; // No valid address for NOP fetched beyond program end
+    }
 
-    // execute
+    // Execute instruction in EX stage
     if (ex_reg.raw != NOP_INSTR)
     {
-      execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
+      execute_instruction(ex_reg); // Pass the entire Decodedinstruction_t struct from EX stage
     }
 
     // print the pipeline state
