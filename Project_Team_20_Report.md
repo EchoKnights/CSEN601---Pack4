@@ -30,10 +30,10 @@
     *   **Tutorial:** 28
 *   **Name:** Tony Makaryous
     *   **ID:** 58-7496
-    *   **Tutorial:** [Fill in Tutorial Section]
+    *   **Tutorial:** 11
 *   **Name:** Mohammed ElAzab
     *   **ID:** 58-26108
-    *   **Tutorial:** [Fill in Tutorial Section]
+    *   **Tutorial:** 12
 
 ---
 
