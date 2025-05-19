@@ -1,498 +1,568 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-//#include <stdint.h> This gives access to the uint16_t type, which is a 16-bit unsigned integer type that i wanted to use for the instructions to ensure that the instructions are always 16 bits long.
-//but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
+// #include <stdint.h> This gives access to the uint16_t type, which is a 16-bit unsigned integer type that i wanted to use for the instructions to ensure that the instructions are always 16 bits long.
+// but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
 
 #define INSTRUCTION_MEMORY_SIZE 1024
 #define DATA_MEMORY_SIZE 2048
-#define NOP_INSTR 0b1100000000000000  //nop instruction encoding, which just does nothing and acts as a filler.
-#define HALT_INSTR 0b1101000000000000 //halt instruction encoding.
+#define NOP_INSTR 0b1100000000000000  // nop instruction encoding, which just does nothing and acts as a filler.
+#define HALT_INSTR 0b1101000000000000 // halt instruction encoding.
 
-//variables
-FILE *fptr; 
+// variables
+FILE *fptr;
 
 int fetched = 0;
 int executed = 0;
-int cycles = 0; //number of cycles that have passed.
-int max_cycles = 100; //if i don't include this, the program runs forever     
+int cycles = 0;       // number of cycles that have passed.
+int max_cycles = 100; // if i don't include this, the program runs forever
 int program_length = 0;
-int pipeline_depth = 3; //aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
-int if_reg = NOP_INSTR; //raw 16-bit word in the fetch stage
+int pipeline_depth = 3; // aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
+int if_reg = NOP_INSTR; // raw 16-bit word in the fetch stage
 
-
-//arrays
-typedef struct { const char *mn; int opcode; int is_immediate; } ISA; //the ISA table - format: (mnemonic (the actual assembly instruction), opcode, whether r2 is immediate or not(1 = yes, 0 = no)).
+// arrays
+typedef struct
+{
+  const char *mn;
+  int opcode;
+  int is_immediate;
+} ISA; // the ISA table - format: (mnemonic (the actual assembly instruction), opcode, whether r2 is immediate or not(1 = yes, 0 = no)).
 
 static const ISA ISATAB[] = {
-    {"ADD",  0, 0}, 
-    {"SUB",  1, 0}, 
+    {"ADD", 0, 0},
+    {"SUB", 1, 0},
     {"MUL", 2, 0},
-    {"LDI",  3, 1}, 
+    {"LDI", 3, 1},
     {"BEQZ", 4, 1},
-    {"AND",  5, 0}, 
-    {"OR",  6, 0},
-    {"JR",   7, 0},
-    {"SLC",  8, 1}, 
+    {"AND", 5, 0},
+    {"OR", 6, 0},
+    {"JR", 7, 0},
+    {"SLC", 8, 1},
     {"SRC", 9, 1},
-    {"LB",  10, 1}, 
+    {"LB", 10, 1},
     {"SB", 11, 1},
-    {"NOP", 12, 0}, 
-    {"HALT",13,0}
-};
-#define ISA_LEN (sizeof ISATAB/ sizeof ISATAB[0]) 
+    {"NOP", 12, 0},
+    {"HALT", 13, 0}};
+#define ISA_LEN (sizeof ISATAB / sizeof ISATAB[0])
 
-typedef struct {
-    int raw; //the 16-bit word grabbed from memory.
-    int opcode;
-    int r1;
-    int r2;
-    int r1data;
-    int r2data;
+typedef struct
+{
+  int raw; // the 16-bit word grabbed from memory.
+  int opcode;
+  int r1;
+  int r2;
+  int r1data;
+  int r2data;
 } Decodedinstruction_t;
 
-Decodedinstruction_t id_reg = {.raw = NOP_INSTR}; //decoded word in the decoding stage
-Decodedinstruction_t ex_reg = {.raw = NOP_INSTR}; //decoded word in the execution stage
+Decodedinstruction_t id_reg = {.raw = NOP_INSTR}; // decoded word in the decoding stage
+Decodedinstruction_t ex_reg = {.raw = NOP_INSTR}; // decoded word in the execution stage
 
+int REGISTER_FILE[64]; // missing the special registers btw.
 
-int REGISTER_FILE[64]; //missing the special registers btw.
-
-typedef struct {
-    unsigned Z : 1; //zero flag
-    unsigned S : 1; //sign flag
-    unsigned N : 1; //negative flag
-    unsigned V : 1; //overflow flag
-    unsigned C : 1; //carry flag
-    unsigned unused: 3; //bits 5-7
+typedef struct
+{
+  unsigned Z : 1;      // zero flag
+  unsigned S : 1;      // sign flag
+  unsigned N : 1;      // negative flag
+  unsigned V : 1;      // overflow flag
+  unsigned C : 1;      // carry flag
+  unsigned unused : 3; // bits 5-7
 } SREG_t;
 
-SREG_t SREG = {0}; 
+SREG_t SREG = {0};
 
-int PC = 0; //program counter
+int PC = 0; // program counter
 
 int INSTRUCTION_MEMORY[INSTRUCTION_MEMORY_SIZE] = {0};
 
-int DATA_MEMORY[DATA_MEMORY_SIZE]; //this is the data memory, which is initialized to 0 by default.
+int DATA_MEMORY[DATA_MEMORY_SIZE]; // this is the data memory, which is initialized to 0 by default.
 
-
-//functions
-const ISA *get_instr_by_mnemonic(const char *mn) {
-    for (int i = 0; i < ISA_LEN; i++)
-        if (strcmp(ISATAB[i].mn, mn) == 0)
-            return &ISATAB[i];
-    return NULL;
+// functions
+const ISA *get_instr_by_mnemonic(const char *mn)
+{
+  for (int i = 0; i < ISA_LEN; i++)
+    if (strcmp(ISATAB[i].mn, mn) == 0)
+      return &ISATAB[i];
+  return NULL;
 }
 
-const ISA *get_instr_by_opcode(int opcode) {
-    for (int i = 0; i < ISA_LEN; i++)
-        if (ISATAB[i].opcode == opcode)
-            return &ISATAB[i];
-    return NULL;
+const ISA *get_instr_by_opcode(int opcode)
+{
+  for (int i = 0; i < ISA_LEN; i++)
+    if (ISATAB[i].opcode == opcode)
+      return &ISATAB[i];
+  return NULL;
 }
 
-int sign_extend(int imm) {
-    if (imm & 0b00100000)
-        return imm | ~0b00111111;
-    else
-        return imm & 0b00111111;
+int sign_extend(int imm)
+{
+  if (imm & 0b00100000)
+    return imm | ~0b00111111;
+  else
+    return imm & 0b00111111;
 }
 
-//this function is meant to parse immediate values, including negative and anything with a '#' prefix
-int parse_immediate(const char *s) {
-    //skips the '#' prefix if it exists
-    if (s[0] == '#') s++;
-    // Handle negative values
-    int val = atoi(s);
-    // Mask to 6 bits (for 6-bit immediate field, two's complement)
-    if (val < 0) {
-        val = (val + 64) & 0x3F; // 6-bit two's complement
-    } else {
-        val = val & 0x3F;
+// this function is meant to parse immediate values, including negative and anything with a '#' prefix
+int parse_immediate(const char *s)
+{
+  // skips the '#' prefix if it exists
+  if (s[0] == '#')
+    s++;
+  // Handle negative values
+  int val = atoi(s);
+  // Mask to 6 bits (for 6-bit immediate field, two's complement)
+  if (val < 0)
+  {
+    val = (val + 64) & 0x3F; // 6-bit two's complement
+  }
+  else
+  {
+    val = val & 0x3F;
+  }
+  return val;
+}
+
+void loadProgram(const char *fname, int start_addr)
+{
+  FILE *f = fopen(fname, "r");
+  if (!f)
+  {
+    printf("Failed to open %s\n", fname);
+    exit(1);
+  }
+
+  char buf[128]; // modified version of the template code from w3schools, but it's efficient and it works
+  int instr_loaded = 0;
+  int was_empty = (program_length == 0); // flag that checks if the memory was empty when loading the program
+
+  while (fgets(buf, sizeof buf, f) && (start_addr + instr_loaded) < INSTRUCTION_MEMORY_SIZE)
+  {
+    // strip any comments so it doesn't brick the parser
+    char *c = strpbrk(buf, ";");
+    if (c)
+      *c = '\0';
+
+    // skip empty lines
+    char *m = strtok(buf, " \t\r\n");
+    if (!m)
+      continue;
+
+    // pulls the instruction by it's mnemonic and checks if it's valid
+    const ISA *p = get_instr_by_mnemonic(m);
+    if (!p)
+    {
+      printf("Unknown instruction: %s\n", m);
+      continue;
     }
-    return val;
-}
 
-void loadProgram(const char *fname, int start_addr) {
-    FILE *f = fopen(fname,"r");
-    if (!f) {
-        printf("Failed to open %s\n", fname);
-        exit(1);
+    int r1 = 0, r2 = 0;
+    if (p->opcode != 12 && p->opcode != 13)
+    {
+      // R1
+      char *t = strtok(NULL, " ,\t\n");
+      if (!t)
+        continue;
+      r1 = atoi(t + 1);
+
+      // R2
+      t = strtok(NULL, " ,\t\n");
+      if (!t)
+        continue;
+      if (p->is_immediate)
+      {
+        r2 = parse_immediate(t); // use helper for immediate values
+      }
+      else
+      {
+        r2 = (atoi(t + 1));
+      }
     }
 
-    char buf[128]; //modified version of the template code from w3schools, but it's efficient and it works
-    int instr_loaded = 0;
-    int was_empty = (program_length == 0); //flag that checks if the memory was empty when loading the program
+    // folds the assembly instruction into a 16-bit word to be added into memory
+    int word = (p->opcode << 12) | (r1 << 6) | r2;
+    INSTRUCTION_MEMORY[start_addr + instr_loaded] = word; // adds the word into memory
+    instr_loaded++;                                       // increments to keep track of how many instructions were loaded
+    if (p->opcode == 13)
+      break; // ensures the loading process stops at HALT
+  }
+  fclose(f);
 
-    while(fgets(buf,sizeof buf,f) && (start_addr + instr_loaded) < INSTRUCTION_MEMORY_SIZE) {
-        //strip any comments so it doesn't brick the parser
-        char *c = strpbrk(buf,";");
-        if(c) *c = '\0';
+  // updates program_length
+  if (start_addr + instr_loaded > program_length)
+    program_length = start_addr + instr_loaded;
 
-        //skip empty lines
-        char *m = strtok(buf," \t\r\n");
-        if (!m) continue;
+  // preps the pipeline if this is the first program loaded
+  if (was_empty && instr_loaded > 0)
+  {
+    if_reg = INSTRUCTION_MEMORY[0];
+    fetched = 1;
+    id_reg.raw = NOP_INSTR;
+    ex_reg.raw = NOP_INSTR;
+  }
+}
 
-        //pulls the instruction by it's mnemonic and checks if it's valid
-        const ISA *p = get_instr_by_mnemonic(m);
-        if (!p) {
-            printf("Unknown instruction: %s\n", m);
-            continue;
+int fetch_instruction()
+{
+  if (PC < INSTRUCTION_MEMORY_SIZE)
+  {
+    int instruction = INSTRUCTION_MEMORY[PC];
+    PC++;
+    return instruction;
+  }
+}
+
+Decodedinstruction_t decode_instruction(int instruction)
+{
+  {
+    Decodedinstruction_t i = {.raw = instruction};
+    i.opcode = ((unsigned)instruction >> 12);
+    i.r1 = ((instruction >> 6) & 0b000000111111);
+    i.r2 = (instruction & 0b0000000000111111);
+
+    i.r1data = REGISTER_FILE[i.r1];
+    i.r2data = REGISTER_FILE[i.r2];
+
+    return i;
+  }
+}
+
+void flush_pipeline(int new_pc)
+{
+  if_reg = NOP_INSTR;
+  id_reg = decode_instruction(NOP_INSTR);
+  fetched = new_pc;
+  PC = new_pc;
+}
+
+// this function prints all instructions in the instruction in assembly format
+void print_instructions()
+{
+  printf("Instruction Memory:\n");
+  for (int i = 0; i < INSTRUCTION_MEMORY_SIZE; i++)
+  {
+    int word = INSTRUCTION_MEMORY[i];
+    if (word != 0)
+    {
+      int opcode = (word >> 12) & 0xF;
+      int r1 = (word >> 6) & 0x3F;
+      int r2 = word & 0x3F;
+      const ISA *isa = get_instr_by_opcode(opcode);
+      if (isa)
+      {
+        if (opcode == 12 || opcode == 13)
+        { // NOP or HALT
+          printf("Instruction %d: %s\n", i, isa->mn);
         }
-
-        int r1=0, r2=0;
-        if(p->opcode!=12 && p->opcode!=13){ 
-            //R1
-            char *t = strtok(NULL," ,\t\n");  
-            if (!t) continue;
-            r1 = atoi(t+1);
-
-            //R2 
-            t = strtok(NULL," ,\t\n");
-            if (!t) continue;
-            if (p->is_immediate){
-                r2 = parse_immediate(t); // use helper for immediate values
-            }
-            else{ 
-                r2 = (atoi(t+1));
-            }
+        else if (isa->is_immediate)
+        {
+          printf("Instruction %d: %s R%d, #%d\n", i, isa->mn, r1, (r2 & 0x20) ? (r2 | ~0x3F) : r2);
         }
-
-        //folds the assembly instruction into a 16-bit word to be added into memory
-        int word = (p->opcode<<12) | (r1<<6) | r2;
-        INSTRUCTION_MEMORY[start_addr + instr_loaded] = word; //adds the word into memory
-        instr_loaded++; //increments to keep track of how many instructions were loaded
-        if(p->opcode==13) break; //ensures the loading process stops at HALT
-    }
-    fclose(f);
-
-    //updates program_length
-    if (start_addr + instr_loaded > program_length)
-        program_length = start_addr + instr_loaded;
-
-    //preps the pipeline if this is the first program loaded
-    if (was_empty && instr_loaded > 0) {
-        if_reg = INSTRUCTION_MEMORY[0];
-        fetched = 1;
-        id_reg.raw = NOP_INSTR;
-        ex_reg.raw = NOP_INSTR;
-    }
-}
-
-int fetch_instruction() {
-    if (PC < INSTRUCTION_MEMORY_SIZE) {
-        int instruction = INSTRUCTION_MEMORY[PC];
-        PC++;
-        return instruction;
-    }
-}
-
-Decodedinstruction_t decode_instruction(int instruction) {
-    {   
-        Decodedinstruction_t i = {.raw = instruction};
-        i.opcode = ((unsigned) instruction >> 12);
-        i.r1 = ((instruction >> 6) & 0b000000111111);
-        i.r2 = (instruction & 0b0000000000111111);
-    
-        i.r1data = REGISTER_FILE[i.r1];
-        i.r2data = REGISTER_FILE[i.r2];
-
-        return i;
-    }
-}
-
-
-void flush_pipeline(int new_pc) {
-    if_reg = NOP_INSTR;
-    id_reg = decode_instruction(NOP_INSTR);
-    fetched = new_pc;
-    PC = new_pc;
-}
-
-//this function prints all instructions in the instruction in assembly format
-void print_instructions(){
-    printf("Instruction Memory:\n");
-    for (int i = 0; i < INSTRUCTION_MEMORY_SIZE; i++) {
-        int word = INSTRUCTION_MEMORY[i];
-        if (word != 0) {
-            int opcode = (word >> 12) & 0xF;
-            int r1 = (word >> 6) & 0x3F;
-            int r2 = word & 0x3F;
-            const ISA *isa = get_instr_by_opcode(opcode);
-            if (isa) {
-                if (opcode == 12 || opcode == 13) { //NOP or HALT
-                    printf("Instruction %d: %s\n", i, isa->mn);
-                } else if (isa->is_immediate) {
-                    printf("Instruction %d: %s R%d, #%d\n", i, isa->mn, r1, (r2 & 0x20) ? (r2 | ~0x3F) : r2);
-                } else {
-                    printf("Instruction %d: %s R%d, R%d\n", i, isa->mn, r1, r2);
-                }
-            } else {
-                printf("Instruction %d: UNKNOWN (0x%04X)\n", i, word);
-            }
+        else
+        {
+          printf("Instruction %d: %s R%d, R%d\n", i, isa->mn, r1, r2);
         }
+      }
+      else
+      {
+        printf("Instruction %d: UNKNOWN (0x%04X)\n", i, word);
+      }
     }
-    printf("\n"); 
+  }
+  printf("\n");
 }
 
-//responsible for printing everything in the pipeline, like the current instruction in each stage, as well as register and memory updates.
-void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, Decodedinstruction_t ex_reg) {
-    static int prev_register_file[64] = {0};
-    static int prev_data_memory[DATA_MEMORY_SIZE] = {0};
-    static int first_call = 1;
+// responsible for printing everything in the pipeline, like the current instruction in each stage, as well as register and memory updates.
+void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, Decodedinstruction_t ex_reg)
+{
+  static int prev_register_file[64] = {0};
+  static int prev_data_memory[DATA_MEMORY_SIZE] = {0};
+  static int first_call = 1;
 
-    //prints the current fetched instruction in binary
-    printf("Cycle %2d  |  IF ", cycle + 1);
-    for (int i = 15; i >= 0; i--) {
-        printf("%d", (if_reg >> i) & 1);
-        if (i % 4 == 0 && i != 0) printf(" ");
-    }
-    //prints the current instruction per stage
-    const ISA *if_isa = get_instr_by_opcode((if_reg >> 12) & 0xF);
-    const ISA *id_isa = get_instr_by_opcode(id_reg.opcode);
-    const ISA *ex_isa = get_instr_by_opcode(ex_reg.opcode);
+  // prints the current fetched instruction in binary
+  printf("Cycle %2d  |  IF ", cycle + 1);
+  for (int i = 15; i >= 0; i--)
+  {
+    printf("%d", (if_reg >> i) & 1);
+    if (i % 4 == 0 && i != 0)
+      printf(" ");
+  }
+  // prints the current instruction per stage
+  const ISA *if_isa = get_instr_by_opcode((if_reg >> 12) & 0xF);
+  const ISA *id_isa = get_instr_by_opcode(id_reg.opcode);
+  const ISA *ex_isa = get_instr_by_opcode(ex_reg.opcode);
 
-    printf("  |  IF: %-5s", if_isa ? if_isa->mn : "UNK");
-    printf("  |  ID: %-5s", id_isa ? id_isa->mn : "UNK");
-    printf("  |  EX: %-5s", ex_isa ? ex_isa->mn : "UNK");
+  printf("  |  IF: %-5s", if_isa ? if_isa->mn : "UNK");
+  printf("  |  ID: %-5s", id_isa ? id_isa->mn : "UNK");
+  printf("  |  EX: %-5s", ex_isa ? ex_isa->mn : "UNK");
 
-    //on first call, just copy the initial state for comparison
-    //this is to ensure that the first call doesn't print garbage values (which it did, repeatedly)
-    if (first_call) {
-        memcpy(prev_register_file, REGISTER_FILE, sizeof(REGISTER_FILE));
-        memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
-        first_call = 0;
-        printf("\n");
-        return;
-    }
-
-    //cheks for register updates
-    int reg_updated = 0;
-    for (int i = 0; i < 64; i++) {
-        if (REGISTER_FILE[i] != prev_register_file[i]) {
-            if (!reg_updated) {
-                printf("  |  Register Updates:");
-                reg_updated = 1;
-            }
-            printf(" R%d: %d -> %d;", i, prev_register_file[i], REGISTER_FILE[i]);
-        }
-    }
-
-    //checks for memory updates
-    int mem_updated = 0;
-    for (int i = 0; i < DATA_MEMORY_SIZE; i++) {
-        if (DATA_MEMORY[i] != prev_data_memory[i]) {
-            if (!mem_updated) {
-                printf("  |  Memory Updates:");
-                mem_updated = 1;
-            }
-            printf(" M[%d]: %d -> %d;", i, prev_data_memory[i], DATA_MEMORY[i]);
-        }
-    }
-
-    //updates the previous state so it can be compared to the current state
+  // on first call, just copy the initial state for comparison
+  // this is to ensure that the first call doesn't print garbage values (which it did, repeatedly)
+  if (first_call)
+  {
     memcpy(prev_register_file, REGISTER_FILE, sizeof(REGISTER_FILE));
     memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
-
+    first_call = 0;
     printf("\n");
-}
+    return;
+  }
 
-void set_carry_flag(int carry) {
-    if (carry == 1) {
-        SREG.C = 1;
-    } 
-    else{
-        SREG.C = 0;
+  // cheks for register updates
+  int reg_updated = 0;
+  for (int i = 0; i < 64; i++)
+  {
+    if (REGISTER_FILE[i] != prev_register_file[i])
+    {
+      if (!reg_updated)
+      {
+        printf("  |  Register Updates:");
+        reg_updated = 1;
+      }
+      printf(" R%d: %d -> %d;", i, prev_register_file[i], REGISTER_FILE[i]);
     }
-}
+  }
 
-void set_zero_flag(int r1data) {
-    if (r1data == 0) {
-        SREG.Z = 1;
-    } else {
-        SREG.Z = 0;
+  // checks for memory updates
+  int mem_updated = 0;
+  for (int i = 0; i < DATA_MEMORY_SIZE; i++)
+  {
+    if (DATA_MEMORY[i] != prev_data_memory[i])
+    {
+      if (!mem_updated)
+      {
+        printf("  |  Memory Updates:");
+        mem_updated = 1;
+      }
+      printf(" M[%d]: %d -> %d;", i, prev_data_memory[i], DATA_MEMORY[i]);
     }
+  }
+
+  // updates the previous state so it can be compared to the current state
+  memcpy(prev_register_file, REGISTER_FILE, sizeof(REGISTER_FILE));
+  memcpy(prev_data_memory, DATA_MEMORY, sizeof(DATA_MEMORY));
+
+  printf("\n");
 }
 
-void set_negative_flag(int r1data) {
-    if (r1data < 0) {
-        SREG.N = 1;
-    } else {
-        SREG.N = 0;
+void set_carry_flag(int carry)
+{
+  if (carry == 1)
+  {
+    SREG.C = 1;
+  }
+  else
+  {
+    SREG.C = 0;
+  }
+}
+
+void set_zero_flag(int r1data)
+{
+  if (r1data == 0)
+  {
+    SREG.Z = 1;
+  }
+  else
+  {
+    SREG.Z = 0;
+  }
+}
+
+void set_negative_flag(int r1data)
+{
+  if (r1data < 0)
+  {
+    SREG.N = 1;
+  }
+  else
+  {
+    SREG.N = 0;
+  }
+}
+
+void set_sign_flag(int Z, int N)
+{
+  SREG.S = Z ^ N;
+}
+
+void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data)
+{
+  int imm = sign_extend(r2);
+  int carry = 0;
+  int r1_sign_bit = (r1data >> 7);
+  int r2_sign_bit = (r2data >> 7);
+  int result_sign_bit = 0;
+  int left_part = 0;
+  int right_part = 0;
+
+  switch (opcode)
+  {       // the switch case should be updated to reflect the actual opcodes.
+  case 0: // add
+    r1data = r1data + r2data;
+    REGISTER_FILE[r1] = r1data;
+
+    // set the carry flag
+    carry = r1data >> 8;
+    set_carry_flag(carry);
+
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    set_sign_flag(SREG.Z, SREG.N);
+
+    // set the overflow flag
+    result_sign_bit = (r1data >> 7);
+    if (r1_sign_bit == r2_sign_bit && r1_sign_bit != result_sign_bit)
+    {
+      SREG.V = 1;
     }
-}
-
-void set_sign_flag(int Z, int N) {
-    SREG.S = Z ^ N;
-}
-
-void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
-    int imm = sign_extend(r2);
-    int carry = 0;
-    int r1_sign_bit = (r1data >> 7);
-    int r2_sign_bit = (r2data >> 7);
-    int result_sign_bit = 0;
-    int left_part = 0;
-    int right_part = 0;
-
-    switch (opcode) { //the switch case should be updated to reflect the actual opcodes.
-        case 0: //add
-        r1data = r1data + r2data;
-        REGISTER_FILE[r1] = r1data;
-
-        //set the carry flag
-        carry = r1data >> 8;
-        set_carry_flag(carry);
-
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        set_sign_flag(SREG.Z, SREG.N);
-
-        //set the overflow flag
-        result_sign_bit = (r1data >> 7);
-        if (r1_sign_bit == r2_sign_bit && r1_sign_bit != result_sign_bit) {
-            SREG.V = 1;
-        } 
-        else{
-            SREG.V = 0;
-        }
-        break;
-
-        case 1: //sub
-        r1data = r1data - r2data;
-        REGISTER_FILE[r1] = r1data;
-
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        set_sign_flag(SREG.Z, SREG.N);
-
-        //overflow flag
-        result_sign_bit = (r1data >> 7);
-        if (r1_sign_bit != r2_sign_bit && r2_sign_bit == result_sign_bit) {
-            SREG.V = 1;
-        } 
-        else{
-            SREG.V = 0;
-        }
-        break;
-
-        case 2: //mul
-        r1data = r1data * r2data;
-        REGISTER_FILE[r1] = r1data;
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        break;
-
-        case 3: //load immediate
-        r1data = imm;
-        REGISTER_FILE[r1] = r1data;
-        break;
-
-        case 4: //branch if equal zero
-        if (r1data == 0) {
-            int target = PC + sign_extend(r2);
-            flush_pipeline(target);
-            printf("Branch taken to address %d\n", target);
-        }
-        break;
-
-        case 5: //and
-        r1data = r1data & r2data;
-        REGISTER_FILE[r1] = r1data;
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        break;
-
-        case 6: //or
-        r1data = r1data | r2data;
-        REGISTER_FILE[r1] = r1data;
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        break;
-
-        case 7: //jump register
-        r1data = REGISTER_FILE[r1];
-        flush_pipeline(r1data);
-        printf("Jumping to address %d\n", r1data);
-        break;
-
-        case 8: //shift left circular
-        left_part  = (r1data << DATA_MEMORY[imm]);
-        right_part = (r1data >> (8 - DATA_MEMORY[imm]));
-        REGISTER_FILE[r1] = (left_part | right_part);
-
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        break;
-
-        case 9: //shift right circular
-        right_part = (r1data >> imm) & 0xFF;
-        left_part  = (r1data << (8 - imm)) & 0xFF;
-        REGISTER_FILE[r1] = (left_part | right_part);
-
-        set_negative_flag(r1data);
-        set_zero_flag(r1data);
-        break;
-
-        case 10: //load byte
-        r1data = DATA_MEMORY[imm];
-        REGISTER_FILE[r1] = r1data;
-        break;
-
-        case 11: //store byte
-        DATA_MEMORY[imm] = REGISTER_FILE[r1];
-        break;
-
-        case 12: //nop
-        //do nothing
-        break;
-
-        case 13: //halt
-        printf("HALT instruction executed.\n");
-
+    else
+    {
+      SREG.V = 0;
     }
+    break;
+
+  case 1: // sub
+    r1data = r1data - r2data;
+    REGISTER_FILE[r1] = r1data;
+
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    set_sign_flag(SREG.Z, SREG.N);
+
+    // overflow flag
+    result_sign_bit = (r1data >> 7);
+    if (r1_sign_bit != r2_sign_bit && r2_sign_bit == result_sign_bit)
+    {
+      SREG.V = 1;
+    }
+    else
+    {
+      SREG.V = 0;
+    }
+    break;
+
+  case 2: // mul
+    r1data = r1data * r2data;
+    REGISTER_FILE[r1] = r1data;
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    break;
+
+  case 3: // load immediate
+    r1data = imm;
+    REGISTER_FILE[r1] = r1data;
+    break;
+
+  case 4: // branch if equal zero
+    if (r1data == 0)
+    {
+      int target = PC + sign_extend(r2);
+      flush_pipeline(target);
+      printf("Branch taken to address %d\n", target);
+    }
+    break;
+
+  case 5: // and
+    r1data = r1data & r2data;
+    REGISTER_FILE[r1] = r1data;
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    break;
+
+  case 6: // or
+    r1data = r1data | r2data;
+    REGISTER_FILE[r1] = r1data;
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    break;
+
+  case 7: // jump register
+    r1data = REGISTER_FILE[r1];
+    flush_pipeline(r1data);
+    printf("Jumping to address %d\n", r1data);
+    break;
+
+  case 8: // shift left circular
+    left_part = (r1data << DATA_MEMORY[imm]);
+    right_part = (r1data >> (8 - DATA_MEMORY[imm]));
+    REGISTER_FILE[r1] = (left_part | right_part);
+
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    break;
+
+  case 9: // shift right circular
+    right_part = (r1data >> imm) & 0xFF;
+    left_part = (r1data << (8 - imm)) & 0xFF;
+    REGISTER_FILE[r1] = (left_part | right_part);
+
+    set_negative_flag(r1data);
+    set_zero_flag(r1data);
+    break;
+
+  case 10: // load byte
+    r1data = DATA_MEMORY[imm];
+    REGISTER_FILE[r1] = r1data;
+    break;
+
+  case 11: // store byte
+    DATA_MEMORY[imm] = REGISTER_FILE[r1];
+    break;
+
+  case 12: // nop
+    // do nothing
+    break;
+
+  case 13: // halt
+    printf("HALT instruction executed.\n");
+  }
 }
 
-int main(){
-    loadProgram("test3.txt", 0); //load the program from the file.
-    id_reg = decode_instruction(NOP_INSTR);
-    ex_reg = decode_instruction(NOP_INSTR);
+int main()
+{
+  loadProgram("test4.txt", 0); // load the program from the file.
+  id_reg = decode_instruction(NOP_INSTR);
+  ex_reg = decode_instruction(NOP_INSTR);
 
-    print_instructions(cycles,if_reg, id_reg, ex_reg); //prints the instructions in the instruction memory in assembly format
+  print_instructions(cycles, if_reg, id_reg, ex_reg); // prints the instructions in the instruction memory in assembly format
 
-    //print the pipeline state
+  // print the pipeline state
+  print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
+
+  // ensures that the program doesn't run forever.
+  while (executed < program_length + pipeline_depth - 1)
+  {
+    if (cycles >= max_cycles)
+    {
+      printf("maximum cycles reached.\n");
+      break;
+    }
+
+    cycles++;
+    ex_reg = id_reg;
+
+    // shift the instruction inside the fetch slot to the decode slot.
+    id_reg = decode_instruction(if_reg);
+
+    // start the fetch again.
+    if (fetched < program_length)
+      if_reg = INSTRUCTION_MEMORY[fetched++];
+    else
+      if_reg = NOP_INSTR;
+
+    // execute
+    if (ex_reg.raw != NOP_INSTR)
+    {
+      execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
+    }
+
+    // print the pipeline state
     print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
 
-    //ensures that the program doesn't run forever.
-    while (executed < program_length + pipeline_depth - 1){
-        if (cycles >= max_cycles) {            
-            printf("maximum cycles reached.\n");
-            break;   
-        }
+    executed++;
+  }
 
-        cycles++;
-        ex_reg = id_reg;
+  printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length - 1)); // prints the total cycles taken to execute according to the formula on the milestone description
 
-        //shift the instruction inside the fetch slot to the decode slot.
-        id_reg = decode_instruction(if_reg);
-
-        //start the fetch again.
-        if (fetched < program_length)
-            if_reg = INSTRUCTION_MEMORY[fetched++];
-        else
-            if_reg = NOP_INSTR;
-
-        //execute
-        if (ex_reg.raw != NOP_INSTR) {
-            execute_instruction(ex_reg.opcode, ex_reg.r1, ex_reg.r2, ex_reg.r1data, ex_reg.r2data);
-        }
-
-        //print the pipeline state
-        print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
-
-        executed++;
-    }
-
-    printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length-1)); //prints the total cycles taken to execute according to the formula on the milestone description
-    
-    return 0;
+  return 0;
 }
