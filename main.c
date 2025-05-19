@@ -200,6 +200,14 @@ Decodedinstruction_t decode_instruction(int instruction) {
     }
 }
 
+
+void flush_pipeline(int new_pc) {
+    if_reg = NOP_INSTR;
+    id_reg = decode_instruction(NOP_INSTR);
+    fetched = new_pc;
+    PC = new_pc;
+}
+
 //this function prints all instructions in the instruction in assembly format
 void print_instructions(){
     printf("Instruction Memory:\n");
@@ -380,8 +388,10 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 4: //branch if equal zero
-        if(r1data == 0) {
-            PC += sign_extend(r2);
+        if (r1data == 0) {
+            int target = PC + sign_extend(r2);
+            flush_pipeline(target);
+            printf("Branch taken to address %d\n", target);
         }
         break;
 
@@ -400,7 +410,9 @@ void execute_instruction(int opcode, int r1, int r2, int r1data, int r2data) {
         break;
 
         case 7: //jump register
-        PC = r1data | r2data;
+        r1data = REGISTER_FILE[r1];
+        flush_pipeline(r1data);
+        printf("Jumping to address %d\n", r1data);
         break;
 
         case 8: //shift left circular
