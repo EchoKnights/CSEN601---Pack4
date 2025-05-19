@@ -349,6 +349,29 @@ void print_pipeline_state(int cycle, int if_reg, Decodedinstruction_t id_reg, De
   printf("\n");
 }
 
+
+void print_memory()
+{
+  printf("Data Memory:\n");
+  for (int i = 0; i < DATA_MEMORY_SIZE; i++)
+  {
+    if (DATA_MEMORY[i] != 0)
+    {
+      printf("M[%d]: %d\n", i, DATA_MEMORY[i]);
+    }
+  }
+  printf("\n");
+
+    printf("Register File:\n");
+    for (int i = 0; i < 64; i++)
+    {
+        if (REGISTER_FILE[i] != 0)
+        {
+            printf("R[%d]: %d\n", i, REGISTER_FILE[i]);
+        }
+    }
+}
+
 void set_carry_flag(int carry)
 {
   if (carry == 1)
@@ -613,6 +636,7 @@ int main()
 
   // print the initial pipeline state
   print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
+  print_memory(); //prints the initial states of both the data memory and register file
 
   // ensures that the program doesn't run forever.
   while (executed < program_length + pipeline_depth - 1 + total_stalled_cycles) // Adjusted for stalls
@@ -630,6 +654,7 @@ int main()
     int current_cycle_if_reg_addr = if_reg_addr;
 
     print_pipeline_state(cycles, current_cycle_if_reg, current_cycle_id_reg, current_cycle_ex_reg);
+    print_memory();
 
     bool stall_this_cycle = false;
     bool branch_taken_or_jumped_in_ex = false;
