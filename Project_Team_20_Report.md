@@ -207,9 +207,20 @@ Describe the purpose and key logic of:
     *   Updating `PC` and `fetched` to the target address.
 *   How this ensures the correct instruction is fetched in the cycle after the branch/jump instruction's EX stage.
 
-### 3.7. Data Hazard Policy
-*   Explicitly state that data hazards (e.g., RAW) are not handled, as per project requirements.
-*   Briefly explain the consequence: an instruction will read the old value of a register if the immediately preceding instruction writes to it and the value has not yet been written back from the EX stage.
+### 3.7. Data Hazard Handling (RAW Hazards)
+*   **Policy:** The simulator implements data hazard handling for Read-After-Write (RAW) hazards using a pipeline stall mechanism.
+*   **Detection:** A RAW hazard is detected if an instruction in the Execute (EX) stage (`ex_reg`) writes to a general-purpose register (excluding R0) that is read as a source by the instruction currently in the Decode (ID) stage (`id_reg`).
+    *   The detection logic checks if `ex_reg` is a "producer" instruction (ADD, SUB, MUL, LDI, AND, OR, SLC, SRC, LB) and its destination register (`ex_reg.r1`) matches either `id_reg.r1` (if used as a source) or `id_reg.r2` (if `id_reg` is an R-type instruction using R2 as a source).
+*   **Stalling Mechanism:**
+    *   If a RAW hazard is detected:
+        *   The instruction in `ex_reg` (the producer) is allowed to complete its execution and write-back in the current cycle.
+        *   A 1-cycle stall is introduced.
+        *   For the next cycle:
+            *   A NOP "bubble" is inserted into the `ex_reg`.
+            *   The instruction in `id_reg` (the consumer) and the instruction in `if_reg` are effectively stalled (they are not advanced, and `PC`/`fetched` do not progress).
+        *   The `total_stalled_cycles` counter is incremented.
+    *   This stall ensures that when the consumer instruction in `id_reg` re-attempts decoding in the cycle after the stall, it reads the updated register value written by the producer.
+*   **Impact on Performance:** Stalling introduces bubbles into the pipeline, increasing the total number of clock cycles required to execute a program compared to a pipeline without data hazard handling or with forwarding.
 
 ## 4. Testing and Verification
 
