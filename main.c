@@ -662,8 +662,8 @@ int main()
         {
           // R-type instructions using R2 as a data source: ADD, SUB, MUL, AND, OR
           bool id_reads_r2_as_reg_data_source = (current_cycle_id_reg.opcode == 0 || current_cycle_id_reg.opcode == 1 ||
-                                                 current_cycle_id_reg.opcode == 2 || current_cycle_id_reg.opcode == 5 ||
-                                                 current_cycle_id_reg.opcode == 6);
+                                                current_cycle_id_reg.opcode == 2 || current_cycle_id_reg.opcode == 5 ||
+                                                current_cycle_id_reg.opcode == 6);
           if (id_reads_r2_as_reg_data_source && current_cycle_id_reg.r2 == producer_dest_reg)
           {
             stall_this_cycle = true;
