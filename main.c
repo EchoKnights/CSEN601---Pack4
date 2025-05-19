@@ -390,7 +390,7 @@ void set_sign_flag(int Z, int N)
   SREG.S = Z ^ N;
 }
 
-void execute_instruction(Decodedinstruction_t instr)
+bool execute_instruction(Decodedinstruction_t instr)
 {
   int opcode = instr.opcode;
   int r1 = instr.r1;
@@ -473,6 +473,7 @@ void execute_instruction(Decodedinstruction_t instr)
       int target = pc_of_beqz_plus_1 + imm_val_signed;
       flush_pipeline(target);
       printf("Branch taken to address %d (from instruction at %d)\n", target, instr.address);
+      return true;
     }
     break;
 
@@ -494,7 +495,7 @@ void execute_instruction(Decodedinstruction_t instr)
     // Target address is content of R[R1] (instr.r1data)
     flush_pipeline(instr.r1data);
     printf("Jumping to address %d (from R%d which holds %d, instruction at %d)\n", instr.r1data, instr.r1, instr.r1data, instr.address);
-    break;
+    return true;
 
   case 8: // shift left circular (SLC R1, Imm)
   {
@@ -573,6 +574,7 @@ void execute_instruction(Decodedinstruction_t instr)
   case 13: // halt
     printf("HALT instruction executed.\n");
   }
+  return false;
 }
 
 int main()
@@ -630,6 +632,7 @@ int main()
     print_pipeline_state(cycles, current_cycle_if_reg, current_cycle_id_reg, current_cycle_ex_reg);
 
     bool stall_this_cycle = false;
+    bool branch_taken_or_jumped_in_ex = false;
     if (current_cycle_ex_reg.raw != NOP_INSTR && current_cycle_id_reg.raw != NOP_INSTR)
     {
       const ISA *ex_isa_info = get_instr_by_opcode(current_cycle_ex_reg.opcode);
@@ -659,8 +662,8 @@ int main()
         {
           // R-type instructions using R2 as a data source: ADD, SUB, MUL, AND, OR
           bool id_reads_r2_as_reg_data_source = (current_cycle_id_reg.opcode == 0 || current_cycle_id_reg.opcode == 1 ||
-                                                current_cycle_id_reg.opcode == 2 || current_cycle_id_reg.opcode == 5 ||
-                                                current_cycle_id_reg.opcode == 6);
+                                                 current_cycle_id_reg.opcode == 2 || current_cycle_id_reg.opcode == 5 ||
+                                                 current_cycle_id_reg.opcode == 6);
           if (id_reads_r2_as_reg_data_source && current_cycle_id_reg.r2 == producer_dest_reg)
           {
             stall_this_cycle = true;
@@ -672,7 +675,7 @@ int main()
     // Execute instruction in EX stage (happens regardless of stall for the producer)
     if (current_cycle_ex_reg.raw != NOP_INSTR)
     {
-      execute_instruction(current_cycle_ex_reg);
+      branch_taken_or_jumped_in_ex = execute_instruction(current_cycle_ex_reg);
     }
     // Increment executed count if a valid instruction (not NOP) finished EX, unless it's HALT (HALT stops further execution counting implicitly by breaking)
     if (current_cycle_ex_reg.raw != NOP_INSTR && current_cycle_ex_reg.opcode != 13)
@@ -686,14 +689,29 @@ int main()
     {
       total_stalled_cycles++;
       printf("Data hazard: Stall inserted at end of cycle %d (entering cycle %d)\n", cycles - 1, cycles);
+      ex_reg = decode_instruction(NOP_INSTR, -1); // Bubble into EX
+                                                  // id_reg, if_reg, fetched are NOT advanced. They hold their values for the next cycle's start.
+    }
+    else if (branch_taken_or_jumped_in_ex)
+    {
+      printf("Control hazard: Pipeline flushed at end of cycle %d (entering cycle %d)\n", cycles - 1, cycles);
+      // 'fetched' was updated by flush_pipeline to the target address.
+      // Global 'if_reg' and 'id_reg' were set to NOP by flush_pipeline.
+      // For the NEXT cycle:
+      ex_reg = decode_instruction(NOP_INSTR, -1); // Instruction from ID (now flushed) becomes NOP
+      id_reg = decode_instruction(NOP_INSTR, -1); // Instruction from IF (now flushed) becomes NOP
 
-      // Pipeline registers for NEXT cycle:
-      ex_reg = decode_instruction(NOP_INSTR, -1); // Bubble into EX stage
-                                                  // id_reg and if_reg effectively stalled: they keep their current_cycle values implicitly
-                                                  // because new values are not shifted in from IF, and IF does not fetch new.
-                                                  // id_reg will be re-populated by decode_instruction(current_cycle_if_reg, current_cycle_if_reg_addr) in the next cycle's logic.
-                                                  // if_reg will be re-populated by fetch logic using the un-incremented 'fetched' in the next cycle's logic.
-                                                  // No change to id_reg, if_reg, if_reg_addr, fetched here; they will be set by normal logic path using stalled inputs.
+      // Fetch the target instruction into IF for the NEXT cycle
+      if_reg_addr = fetched;
+      if (fetched < program_length)
+      {
+        if_reg = INSTRUCTION_MEMORY[fetched++];
+      }
+      else
+      {
+        if_reg = NOP_INSTR;
+        if_reg_addr = -1;
+      }
     }
     else
     {
