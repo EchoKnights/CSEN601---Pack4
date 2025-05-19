@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h> // For bool, true, false
 // #include <stdint.h> This gives access to the uint16_t type, which is a 16-bit unsigned integer type that i wanted to use for the instructions to ensure that the instructions are always 16 bits long.
 // but honestly it's too complicated to use it for now, so i'll just use int and maybe circle back once i ensure functionality is solid.
 
@@ -17,9 +18,10 @@ int executed = 0;
 int cycles = 0;       // number of cycles that have passed.
 int max_cycles = 100; // if i don't include this, the program runs forever
 int program_length = 0;
-int pipeline_depth = 3; // aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
-int if_reg = NOP_INSTR; // raw 16-bit word in the fetch stage
-int if_reg_addr = -1;   // Address of the instruction in if_reg
+int total_stalled_cycles = 0; // For data hazard stalls
+int pipeline_depth = 3;       // aka how many stages are in the pipleline (In our case, 3 stages: fetch, decode, execute)
+int if_reg = NOP_INSTR;       // raw 16-bit word in the fetch stage
+int if_reg_addr = -1;         // Address of the instruction in if_reg
 
 // arrays
 typedef struct
@@ -611,7 +613,7 @@ int main()
   print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
 
   // ensures that the program doesn't run forever.
-  while (executed < program_length + pipeline_depth - 1)
+  while (executed < program_length + pipeline_depth - 1 + total_stalled_cycles) // Adjusted for stalls
   {
     if (cycles >= max_cycles)
     {
@@ -619,37 +621,112 @@ int main()
       break;
     }
 
-    cycles++;
-    ex_reg = id_reg;
+    // Capture pipeline state at the beginning of the cycle for decision making
+    Decodedinstruction_t current_cycle_ex_reg = ex_reg;
+    Decodedinstruction_t current_cycle_id_reg = id_reg;
+    int current_cycle_if_reg = if_reg;
+    int current_cycle_if_reg_addr = if_reg_addr;
 
-    // Pipeline stage progression
-    id_reg = decode_instruction(if_reg, if_reg_addr); // IF -> ID; pass raw instruction and its address for decoding
+    print_pipeline_state(cycles, current_cycle_if_reg, current_cycle_id_reg, current_cycle_ex_reg);
 
-    // Fetch next instruction for IF stage
-    if_reg_addr = fetched; // Store address for the upcoming IF instruction (current 'fetched' value)
-    if (fetched < program_length)
+    bool stall_this_cycle = false;
+    if (current_cycle_ex_reg.raw != NOP_INSTR && current_cycle_id_reg.raw != NOP_INSTR)
     {
-      if_reg = INSTRUCTION_MEMORY[fetched++]; // Fetch from memory and advance 'fetched' pointer
+      const ISA *ex_isa_info = get_instr_by_opcode(current_cycle_ex_reg.opcode);
+      const ISA *id_isa_info = get_instr_by_opcode(current_cycle_id_reg.opcode);
+
+      bool ex_is_producer = ex_isa_info &&
+                            (current_cycle_ex_reg.opcode == 0 || current_cycle_ex_reg.opcode == 1 || current_cycle_ex_reg.opcode == 2 || // ADD, SUB, MUL
+                             current_cycle_ex_reg.opcode == 3 ||                                                                         // LDI
+                             current_cycle_ex_reg.opcode == 5 || current_cycle_ex_reg.opcode == 6 ||                                     // AND, OR
+                             current_cycle_ex_reg.opcode == 8 || current_cycle_ex_reg.opcode == 9 ||                                     // SLC, SRC
+                             current_cycle_ex_reg.opcode == 10);                                                                         // LB
+
+      if (ex_is_producer && current_cycle_ex_reg.r1 != 0)
+      { // R0 is not a hazard source as it cannot be overwritten
+        int producer_dest_reg = current_cycle_ex_reg.r1;
+
+        // Check RAW for id_reg.r1 source
+        // LDI (opcode 3) does not use its R1 field as a source operand for its main operation.
+        bool id_reads_r1_as_source = id_isa_info && (current_cycle_id_reg.opcode != 3);
+        if (id_reads_r1_as_source && current_cycle_id_reg.r1 == producer_dest_reg)
+        {
+          stall_this_cycle = true;
+        }
+
+        // Check RAW for id_reg.r2 source (if R-type for r2)
+        if (!stall_this_cycle && id_isa_info && !id_isa_info->is_immediate)
+        {
+          // R-type instructions using R2 as a data source: ADD, SUB, MUL, AND, OR
+          bool id_reads_r2_as_reg_data_source = (current_cycle_id_reg.opcode == 0 || current_cycle_id_reg.opcode == 1 ||
+                                                current_cycle_id_reg.opcode == 2 || current_cycle_id_reg.opcode == 5 ||
+                                                current_cycle_id_reg.opcode == 6);
+          if (id_reads_r2_as_reg_data_source && current_cycle_id_reg.r2 == producer_dest_reg)
+          {
+            stall_this_cycle = true;
+          }
+        }
+      }
+    }
+
+    // Execute instruction in EX stage (happens regardless of stall for the producer)
+    if (current_cycle_ex_reg.raw != NOP_INSTR)
+    {
+      execute_instruction(current_cycle_ex_reg);
+    }
+    // Increment executed count if a valid instruction (not NOP) finished EX, unless it's HALT (HALT stops further execution counting implicitly by breaking)
+    if (current_cycle_ex_reg.raw != NOP_INSTR && current_cycle_ex_reg.opcode != 13)
+    {
+      executed++;
+    }
+
+    cycles++; // Increment cycle count
+
+    if (stall_this_cycle)
+    {
+      total_stalled_cycles++;
+      printf("Data hazard: Stall inserted at end of cycle %d (entering cycle %d)\n", cycles - 1, cycles);
+
+      // Pipeline registers for NEXT cycle:
+      ex_reg = decode_instruction(NOP_INSTR, -1); // Bubble into EX stage
+                                                  // id_reg and if_reg effectively stalled: they keep their current_cycle values implicitly
+                                                  // because new values are not shifted in from IF, and IF does not fetch new.
+                                                  // id_reg will be re-populated by decode_instruction(current_cycle_if_reg, current_cycle_if_reg_addr) in the next cycle's logic.
+                                                  // if_reg will be re-populated by fetch logic using the un-incremented 'fetched' in the next cycle's logic.
+                                                  // No change to id_reg, if_reg, if_reg_addr, fetched here; they will be set by normal logic path using stalled inputs.
     }
     else
     {
-      if_reg = NOP_INSTR;
-      if_reg_addr = -1; // No valid address for NOP fetched beyond program end
+      // NORMAL pipeline progression for NEXT cycle
+      ex_reg = current_cycle_id_reg;
+      id_reg = decode_instruction(current_cycle_if_reg, current_cycle_if_reg_addr);
+
+      // Fetch next instruction for IF stage for NEXT cycle
+      // This 'fetched' is the one for the *next* instruction to bring into if_reg
+      if_reg_addr = fetched;
+      if (fetched < program_length)
+      {
+        if_reg = INSTRUCTION_MEMORY[fetched++];
+      }
+      else
+      {
+        if_reg = NOP_INSTR;
+        if_reg_addr = -1;
+      }
     }
 
-    // Execute instruction in EX stage
-    if (ex_reg.raw != NOP_INSTR)
-    {
-      execute_instruction(ex_reg); // Pass the entire Decodedinstruction_t struct from EX stage
+    // Check for HALT condition based on the instruction that just FINISHED EX stage
+    if (current_cycle_ex_reg.opcode == 13)
+    { // HALT
+      printf("HALT processed in EX at end of cycle %d. Simulation ending.\n", cycles - 1);
+      // Final print of pipeline state before breaking
+      print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
+      break;
     }
-
-    // print the pipeline state
-    print_pipeline_state(cycles, if_reg, id_reg, ex_reg);
-
-    executed++;
   }
 
-  printf("Total cycles = %d (spec = 3 + (%d-1)×1 = %d)\n", cycles, program_length, 3 + (program_length - 1)); // prints the total cycles taken to execute according to the formula on the milestone description
+  printf("Total cycles = %d (spec for no stalls/branches = %d + (%d-1)*1 = %d)\n", cycles, 3, program_length, 3 + (program_length - 1));
+  printf("Total stalled cycles due to data hazards = %d\n", total_stalled_cycles);
 
   return 0;
 }
